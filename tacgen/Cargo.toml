@@ -1,0 +1,11 @@
+[package]
+name = "tacgen"
+version = "0.1.0"
+authors = ["MashPlant <740678788@qq.com>"]
+edition = "2018"
+
+[dependencies]
+common = { path = "../common" }
+syntax = { path = "../syntax" }
+tac = { path = "../tac" }
+typed-arena = "1.4.1"

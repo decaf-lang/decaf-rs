@@ -1,0 +1,9 @@
+[package]
+name = "common"
+version = "0.1.0"
+authors = ["MashPlant <740678788@qq.com>"]
+edition = "2018"
+
+[dependencies]
+indexmap = "1.0.2"
+hashbrown = { version = "0.5", features = ["nightly"] }

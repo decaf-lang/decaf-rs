@@ -1,0 +1,10 @@
+[package]
+name = "typeck"
+version = "0.1.0"
+authors = ["MashPlant <740678788@qq.com>"]
+edition = "2018"
+
+[dependencies]
+common = { path = "../common" }
+syntax = { path = "../syntax" }
+typed-arena = "1.4.1"

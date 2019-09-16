@@ -1,0 +1,31 @@
+[package]
+name = "driver"
+version = "0.1.0"
+authors = ["MashPlant <740678788@qq.com>"]
+edition = "2018"
+
+[dependencies]
+common = { path = "../common" }
+print = { path = "../print" }
+syntax = { path = "../syntax" }
+typeck = { path = "../typeck" }
+tac = { path = "../tac" }
+tacgen = { path = "../tacgen" }
+tacopt = { path = "../tacopt" }
+codegen = { path = "../codegen" }
+duct = "0.12.0"
+typed-arena = "1.4.1"
+tacvm = { git = "https://github.com/MashPlant/tacvm" }
+colored = "1.8"
+clap = "2"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "decaf"
+path = "src/cli.rs"
+
+[[bin]]
+name = "test"
+path = "src/test.rs"

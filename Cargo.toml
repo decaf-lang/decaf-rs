@@ -1,0 +1,17 @@
+cargo-features = ["profile-overrides"]
+
+[workspace]
+members = [
+  "common",
+  "print",
+  "syntax",
+  "typeck",
+  "tac",
+  "tacgen",
+  "tacopt",
+  "codegen",
+  "driver",
+]
+
+[profile.dev.overrides."*"]
+opt-level = 3

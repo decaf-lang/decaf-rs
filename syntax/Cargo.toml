@@ -1,0 +1,12 @@
+[package]
+name = "syntax"
+version = "0.1.0"
+authors = ["MashPlant <740678788@qq.com>"]
+edition = "2018"
+
+[dependencies]
+common = { path = "../common" }
+parser-macros = { git = "https://github.com/MashPlant/lalr1" }
+typed-arena = "1.4.1"
+lazy_static = "1.3.0"
+derive_more = "0.15.0"
