@@ -401,7 +401,7 @@ impl<'p> Parser<'p> {
           l = mk_expr(loc, IndexSel { arr: Box::new(l), idx: Box::new(idx) }.into()),
         IndexOrIdOrCall::IdOrCall(loc, name, ioc) => match ioc {
           Some(arg) =>
-            l = mk_expr(loc, Call { owner: Some(Box::new(l)), name, arg, func: dft() }.into()),
+            l = mk_expr(loc, Call { func: VarSel { owner: Some(Box::new(l)), name, var: dft() }, arg, func_ref: dft() }.into()),
           None => l = mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()),
         }
       }
@@ -454,7 +454,7 @@ impl<'p> Parser<'p> {
   #[rule(Expr9 -> Id IdOrCall)]
   fn expr9_id_or_call(name: Token, ioc: Option<(Loc, Vec<Expr<'p>>)>) -> Expr<'p> {
     match ioc {
-      Some((loc, arg)) => mk_expr(loc, Call { owner: None, name: name.str(), arg, func: dft() }.into()),
+      Some((loc, arg)) => mk_expr(loc, Call { func: VarSel { owner: None, name: name.str(), var: dft() }, arg, func_ref: dft() }.into()),
       None => mk_expr(name.loc(), VarSel { owner: None, name: name.str(), var: dft() }.into()),
     }
   }

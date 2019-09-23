@@ -188,10 +188,11 @@ pub struct IndexSel<'a> {
 }
 
 pub struct Call<'a> {
-  pub owner: Option<Box<Expr<'a>>>,
-  pub name: &'a str,
+  // we don't use func.var, and this VarSel cannot be visited like other VarSel
+  // placing a VarSel here instead of "owner + name" is to make upgrading it to an Expr easier
+  pub func: VarSel<'a>,
   pub arg: Vec<Expr<'a>>,
-  pub func: Cell<Option<&'a FuncDef<'a>>>,
+  pub func_ref: Cell<Option<&'a FuncDef<'a>>>,
 }
 
 pub struct Binary<'a> {

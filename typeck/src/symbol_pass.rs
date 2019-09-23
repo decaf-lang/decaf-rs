@@ -74,7 +74,7 @@ impl<'a> SymbolPass<'a> {
   }
 
   fn func_def(&mut self, f: &'a FuncDef<'a>) {
-    let ret_ty = self.ty(&f.ret);
+    let ret_ty = self.ty(&f.ret, false);
     if let Some((prev, _)) = self.scopes.lookup(f.name, false) {
       self.errors.issue(f.loc, ConflictDeclaration { prev: prev.loc(), name: f.name })
     } else {
@@ -95,7 +95,7 @@ impl<'a> SymbolPass<'a> {
   }
 
   fn var_def(&mut self, v: &'a VarDef<'a>) {
-    v.ty.set(self.ty(&v.syn_ty));
+    v.ty.set(self.ty(&v.syn_ty, false));
     if v.ty.get() == Ty::void() {
       return self.errors.issue(v.loc, VoidVar(v.name));
     }

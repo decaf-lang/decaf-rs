@@ -168,7 +168,7 @@ impl<'a> TypePass<'a> {
         if len != Ty::int() && len != Ty::error() {
           self.errors.issue(n.len.loc, NewArrayNotInt)
         }
-        self.ty(&SynTy { loc: n.elem.loc, arr: n.elem.arr + 1, kind: n.elem.kind })
+        self.ty(&n.elem, true)
       }
       ClassTest(c) => {
         let src = self.expr(&c.expr);
@@ -298,27 +298,34 @@ impl<'a> TypePass<'a> {
   }
 
   fn call(&mut self, c: &'a Call<'a>, loc: Loc) -> Ty<'a> {
-    match &c.owner {
-      Some(o) => {
+    let v = &c.func;
+    match &v.owner {
+      Some(owner) => {
         self.cur_used = true;
-        let o_t = self.expr(o);
-        if o_t == Ty::error() { return Ty::error(); }
-        if c.name == LENGTH && o_t.is_arr() {
+        let owner = self.expr(owner);
+        if owner == Ty::error() { return Ty::error(); }
+        if v.name == LENGTH && owner.is_arr() {
           if !c.arg.is_empty() {
             self.errors.issue(loc, LengthWithArgument(c.arg.len() as u32))
           }
           return Ty::int();
         }
-        match o_t.kind {
-          TyKind::Class(cl) | TyKind::Object(cl) => {
-            self.check_call(c, o_t, cl.lookup(c.name), loc)
+        match owner.kind {
+          TyKind::Class(cl) | TyKind::Object(cl) => if let Some(symbol) = cl.lookup(v.name) {
+            self.check_normal_call(v, c, owner, symbol, loc)
+          } else {
+            self.errors.issue(loc, NoSuchField { name: v.name, owner })
           }
-          _ => self.errors.issue(loc, BadFieldAccess { name: c.name, owner: o_t }),
+          _ => self.errors.issue(loc, BadFieldAccess { name: v.name, owner }),
         }
       }
       None => {
         let cur = self.cur_class.unwrap();
-        self.check_call(c, Ty::mk_obj(cur), cur.lookup(c.name), loc)
+        if let Some(symbol) = cur.lookup(v.name) {
+          self.check_normal_call(v, c, Ty::mk_obj(cur), symbol, loc)
+        } else {
+          self.errors.issue(loc, NoSuchField { name: v.name, owner: Ty::mk_obj(cur) })
+        }
       }
     }
   }
@@ -332,40 +339,35 @@ impl<'a> TypePass<'a> {
     }
   }
 
-  fn check_call(&mut self, c: &'a Call<'a>, owner: Ty<'a>, symbol: Option<Symbol<'a>>, loc: Loc) -> Ty<'a> {
+  fn check_normal_call(&mut self, v: &'a VarSel<'a>, c: &'a Call<'a>, owner: Ty<'a>, symbol: Symbol<'a>, loc: Loc) -> Ty<'a> {
     match symbol {
-      Some(symbol) => {
-        match symbol {
-          Symbol::Func(f) => {
-            c.func.set(Some(f));
-            match &c.owner {
-              Some(_) => if owner.is_class() && !f.static_ {
-                // call a instance method through class name
-                self.errors.issue(loc, BadFieldAccess { name: c.name, owner })
-              }
-              None => {
-                let cur = self.cur_func.unwrap();
-                if cur.static_ && !f.static_ {
-                  self.errors.issue(loc, RefInStatic { field: f.name, func: cur.name })
-                }
-              }
-            };
-            if f.param.len() != c.arg.len() {
-              self.errors.issue(loc, ArgcMismatch { name: c.name, expect: f.param.len() as u32, actual: c.arg.len() as u32 })
-            } else {
-              for (idx, (arg, param)) in c.arg.iter().zip(f.param.iter()).enumerate() {
-                let arg = self.expr(arg);
-                if !arg.assignable_to(param.ty.get()) {
-                  self.errors.issue(c.arg[idx].loc, ArgMismatch { loc: idx as u32 + 1, arg, param: param.ty.get() })
-                }
-              }
-            }
-            f.ret_ty()
+      Symbol::Func(f) => {
+        c.func_ref.set(Some(f));
+        match &v.owner {
+          Some(_) => if owner.is_class() && !f.static_ {
+            // call a instance method through class name
+            self.errors.issue(loc, BadFieldAccess { name: v.name, owner })
           }
-          _ => self.errors.issue(loc, NotFunc { name: c.name, owner }),
+          None => {
+            let cur = self.cur_func.unwrap();
+            if cur.static_ && !f.static_ {
+              self.errors.issue(loc, RefInStatic { field: f.name, func: cur.name })
+            }
+          }
+        };
+        if f.param.len() != c.arg.len() {
+          self.errors.issue(loc, ArgcMismatch { name: v.name, expect: f.param.len() as u32, actual: c.arg.len() as u32 })
+        } else {
+          for (idx, (arg, param)) in c.arg.iter().zip(f.param.iter()).enumerate() {
+            let arg = self.expr(arg);
+            if !arg.assignable_to(param.ty.get()) {
+              self.errors.issue(c.arg[idx].loc, ArgMismatch { loc: idx as u32 + 1, arg, param: param.ty.get() })
+            }
+          }
         }
+        f.ret_ty()
       }
-      None => self.errors.issue(loc, NoSuchField { name: c.name, owner })
+      _ => self.errors.issue(loc, NotFunc { name: v.name, owner }),
     }
   }
 }

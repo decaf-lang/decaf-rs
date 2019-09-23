@@ -15,31 +15,43 @@ fn meet(x: Value, y: Value) -> Value {
 fn transfer(kind: TacKind, env: &mut [Value]) {
   use TacKind::*;
   use Operand::*;
-  use Value::{Const as VConst, Nac};
+  use Value::{Const as C, Nac, Unk};
   match kind {
-    Bin { op, dst, lr } => env[dst as usize] = match lr {
-      [Const(l), Const(r)] => VConst(op.eval(l, r)),
-      [Reg(l), Const(r)] => if let VConst(l) = env[l as usize] { VConst(op.eval(l, r)) } else { Nac },
-      [Const(l), Reg(r)] => if let VConst(r) = env[r as usize] { VConst(op.eval(l, r)) } else { Nac },
-      [Reg(l), Reg(r)] => if let (VConst(l), VConst(r)) = (env[l as usize], env[r as usize]) { VConst(op.eval(l, r)) } else { Nac },
-    },
+    Bin { op, dst, lr } => {
+      let lr = match lr {
+        [Const(l), Const(r)] => (C(l), C(r)),
+        [Reg(l), Const(r)] => (env[l as usize], C(r)),
+        [Const(l), Reg(r)] => (C(l), env[r as usize]),
+        [Reg(l), Reg(r)] => (env[l as usize], env[r as usize]),
+      };
+      env[dst as usize] = match lr {
+        (C(l), C(r)) => C(op.eval(l, r)),
+        (Nac, _) | (_, Nac) => Nac,
+        _ => Unk, // neither is Nac and not both Const => Unk
+      };
+    }
     Un { op, dst, r } => env[dst as usize] = match r[0] {
-      Const(r) => VConst(op.eval(r)),
-      Reg(r) => if let VConst(r) = env[r as usize] { VConst(op.eval(r)) } else { Nac }
+      Const(r) => C(op.eval(r)),
+      Reg(r) => match env[r as usize] { C(r) => C(op.eval(r)), r => r },
     },
-    Assign { dst, src } => env[dst as usize] = match src[0] { Const(r) => VConst(r), Reg(r) => env[r as usize] },
+    Assign { dst, src } => env[dst as usize] = match src[0] { Const(r) => C(r), Reg(r) => env[r as usize] },
     Call { dst, .. } => if let Some(dst) = dst { env[dst as usize] = Nac }
-    LoadInt { dst, i } => env[dst as usize] = VConst(i),
-    // actually LoadStr and LoadVTbl won't give `dst` a Nac
-    // but as long as the implementation is correct, `dst` can never be used in calculation, so giving them Nac is okay
-    Load { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } => env[dst as usize] = Nac,
+    LoadInt { dst, i } => env[dst as usize] = C(i),
+    Load { dst, .. } => env[dst as usize] = Nac,
+    // actually LoadStr and LoadVTbl won't give `dst` a Unk
+    // but as long as the implementation is correct, `dst` can never be used in calculation, so giving them Unk is okay
+    LoadStr { dst, .. } | LoadVTbl { dst, .. } => env[dst as usize] = Unk,
     Param { .. } | Ret { .. } | Jmp { .. } | Label { .. } | Jif { .. } | Store { .. } => {}
   }
 }
 
 pub fn work(f: &mut FuncBB) {
   let (n, each) = (f.bb.len(), f.max_reg as usize);
-  let (mut flow, mut tmp) = (vec![Value::Unk; n * each], vec![Value::Unk; n * each]);
+  let mut flow = vec![Value::Unk; n * each];
+  for i in 0..f.param_num as usize {
+    flow[i] = Value::Nac; // flow[i] is in the entry bb, and setting them is enough
+  }
+  let mut tmp = flow.clone(); // tmp is used to detect whether `flow` has changed
   loop {
     for (idx, b) in f.bb.iter().enumerate() {
       for next in b.next().iter().filter_map(|n| n.map(|n| n as usize)) {
@@ -53,11 +65,9 @@ pub fn work(f: &mut FuncBB) {
       let env = &mut flow[idx * each..(idx + 1) * each];
       for t in b.iter() { transfer(t.payload.borrow().kind, env); }
     }
-    if flow != tmp {
-      tmp.clone_from_slice(&flow);
-    } else { break; }
+    if flow != tmp { tmp.clone_from_slice(&flow); } else { break; }
   }
-  let mut flow_changed = false;
+  let mut flow_changed = false; // whether the edges in flow graph have changed
   for (idx, b) in f.bb.iter_mut().enumerate() {
     let env = &mut flow[idx * each..(idx + 1) * each];
     for t in b.iter() {

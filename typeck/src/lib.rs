@@ -39,8 +39,9 @@ pub fn work<'a>(p: &'a Program<'a>, alloc: &'a TypeCkAlloc<'a>) -> Result<(), Er
 }
 
 impl<'a> TypeCk<'a> {
-  pub fn ty(&mut self, s: &SynTy<'a>) -> Ty<'a> {
-    let kind = match s.kind {
+  // is_arr can be helpful if you want the type of array while only having its element type (to avoid cloning other fields)
+  pub fn ty(&mut self, s: &SynTy<'a>, is_arr: bool) -> Ty<'a> {
+    let kind = match &s.kind {
       SynTyKind::Int => TyKind::Int,
       SynTyKind::Bool => TyKind::Bool,
       SynTyKind::String => TyKind::String,
@@ -52,7 +53,7 @@ impl<'a> TypeCk<'a> {
     match kind {
       TyKind::Error => Ty::error(),
       TyKind::Void if s.arr != 0 => self.errors.issue(s.loc, VoidArrayElement),
-      _ => Ty { arr: s.arr, kind }
+      _ => Ty { arr: s.arr + (is_arr as u32), kind }
     }
   }
 }

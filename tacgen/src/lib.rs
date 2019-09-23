@@ -235,42 +235,45 @@ impl<'a> TacGen<'a> {
         Reg(s1)
       }
       NullLit(_) => Const(0),
-      Call(c) => Reg(match &c.owner {
-        Some(o)if o.ty.get().is_arr() => {
-          let arr = self.expr(o, f);
-          self.length(arr, f)
-        }
-        _ => {
-          let fu = c.func.get().unwrap();
-          let ret = if fu.ret_ty() != Ty::void() { Some(self.reg()) } else { None };
-          let args = c.arg.iter().map(|a| self.expr(a, f)).collect::<Vec<_>>();
-          let hint = CallHint {
-            arg_obj: c.arg.iter().any(|a| a.ty.get().is_class()) || !fu.static_,
-            arg_arr: c.arg.iter().any(|a| a.ty.get().arr > 0),
-          };
-          if fu.static_ {
-            for a in args {
-              f.push(Param { src: [a] });
-            }
-            f.push(TacKind::Call { dst: ret, kind: CallKind::Static(self.func_info[&Ref(fu)].idx, hint) });
-          } else {
-            let owner = match &c.owner {
-              Some(o) => self.expr(o, f),
-              None => Reg(0), // this(i.owner is not set during typeck)
-            };
-            f.push(Param { src: [owner] });
-            for a in args {
-              f.push(Param { src: [a] });
-            }
-            let slot = self.reg();
-            let off = self.func_info[&Ref(fu)].off;
-            f.push(Load { dst: slot, base: [owner], off: 0, hint: MemHint::Immutable })
-              .push(Load { dst: slot, base: [Reg(slot)], off: off as i32 * INT_SIZE, hint: MemHint::Immutable });
-            f.push(TacKind::Call { dst: ret, kind: CallKind::Virtual([Reg(slot)], hint) });
+            Call(c) => {
+        let v = &c.func;
+        Reg(match &v.owner {
+          Some(o)if o.ty.get().is_arr() => {
+            let arr = self.expr(o, f);
+            self.length(arr, f)
           }
-          ret.unwrap_or(0) // if ret is None, the result can't be assigned to others, so 0 will not be used
-        }
-      }),
+          _ => {
+            let fu = c.func_ref.get().unwrap();
+            let ret = if fu.ret_ty() != Ty::void() { Some(self.reg()) } else { None };
+            let args = c.arg.iter().map(|a| self.expr(a, f)).collect::<Vec<_>>();
+            let hint = CallHint {
+              arg_obj: c.arg.iter().any(|a| a.ty.get().is_class()) || !fu.static_,
+              arg_arr: c.arg.iter().any(|a| a.ty.get().arr > 0),
+            };
+            if fu.static_ {
+              for a in args {
+                f.push(Param { src: [a] });
+              }
+              f.push(TacKind::Call { dst: ret, kind: CallKind::Static(self.func_info[&Ref(fu)].idx, hint) });
+            } else {
+              let owner = match &v.owner {
+                Some(o) => self.expr(o, f),
+                None => Reg(0), // this(i.owner is not set during typeck)
+              };
+              f.push(Param { src: [owner] });
+              for a in args {
+                f.push(Param { src: [a] });
+              }
+              let slot = self.reg();
+              let off = self.func_info[&Ref(fu)].off;
+              f.push(Load { dst: slot, base: [owner], off: 0, hint: MemHint::Immutable })
+                .push(Load { dst: slot, base: [Reg(slot)], off: off as i32 * INT_SIZE, hint: MemHint::Immutable });
+              f.push(TacKind::Call { dst: ret, kind: CallKind::Virtual([Reg(slot)], hint) });
+            }
+            ret.unwrap_or(0) // if ret is None, the result can't be assigned to others, so 0 will not be used
+          }
+        })
+      }
       Unary(u) => {
         let (r, dst) = (self.expr(&u.r, f), self.reg());
         (f.push(Un { op: u.op, dst, r: [r] }), Reg(dst)).1

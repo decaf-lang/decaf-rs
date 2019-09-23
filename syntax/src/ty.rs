@@ -2,7 +2,7 @@ use crate::{ClassDef, FuncDef};
 use common::{Loc, Ref};
 use std::fmt;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub enum SynTyKind<'a> {
   Int,
   Bool,
@@ -11,7 +11,7 @@ pub enum SynTyKind<'a> {
   Named(&'a str),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct SynTy<'a> {
   pub loc: Loc,
   pub arr: u32,
@@ -77,9 +77,9 @@ impl<'a> Ty<'a> {
   pub fn mk_func(f: &'a FuncDef<'a>) -> Ty<'a> { Ty { arr: 0, kind: TyKind::Func(f.ret_param_ty.get().unwrap()) } }
 
   pub fn is_arr(&self) -> bool { self.arr > 0 }
-  pub fn is_func(&self) -> bool { if let TyKind::Func(_) = self.kind { true } else { false } }
-  pub fn is_class(&self) -> bool { if let TyKind::Class(_) = self.kind { true } else { false } }
-  pub fn is_object(&self) -> bool { if let TyKind::Object(_) = self.kind { true } else { false } }
+  pub fn is_func(&self) -> bool { self.arr == 0 && if let TyKind::Func(_) = self.kind { true } else { false } }
+  pub fn is_class(&self) -> bool { self.arr == 0 && if let TyKind::Class(_) = self.kind { true } else { false } }
+  pub fn is_object(&self) -> bool { self.arr == 0 && if let TyKind::Object(_) = self.kind { true } else { false } }
 }
 
 impl fmt::Debug for Ty<'_> {
