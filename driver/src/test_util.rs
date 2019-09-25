@@ -31,20 +31,20 @@ pub fn test_all(folder: impl AsRef<Path>, pa_path: impl AsRef<Path>, pa: Pa) -> 
   // if it still doesn't work, or you simply dislike the color, add `colored::control::set_override(false);` before calling `test_all`
   #[cfg(target_os = "windows")] let _ = control::set_virtual_terminal(true);
 
-  let folder = folder.as_ref();
-  let pa_folder = folder.join(pa_path);
-  let ans = pa_folder.join("ans");
-  let out = pa_folder.join("out");
+  let folder = folder.as_ref().join(pa_path);
+  let ans = folder.join("result");
+  let out = folder.join("out");
   if !out.exists() { fs::create_dir_all(&out)?; }
 
-  let mut ret = fs::read_dir(pa_folder)?
-    .filter_map(|f| f.ok().map(|f| f.path()))
-    .filter(|f| f.is_file())
-    .map(|f| {
-      let stem = f.file_stem().expect("testcase should have file name"); // shouldn't fail here, I guess...
-      test_one_caught(&f, out.join(stem).with_extension("result"), ans.join(stem).with_extension("result"), pa)
-    }).collect::<Vec<_>>();
-  ret.sort_unstable_by(|l, r| l.file.cmp(&r.file));
+  let mut files = fs::read_dir(&folder)?.filter_map(|f| {
+    let path = f.ok()?.path();
+    let name = path.file_name()?.to_str()?; // in normal case none of the above 3 ? will fail
+    if path.is_file() && name.ends_with(".decaf") { Some(name.to_owned()) } else { None }
+  }).collect::<Vec<_>>();
+  files.sort_unstable(); // the order of fs::read_dir may be strange, sort them for better debugging
+  let ret = files.iter().map(|f| {
+    test_one_caught(folder.join(f), out.join(f).with_extension("result"), ans.join(f).with_extension("result"), pa)
+  }).collect();
   Ok(ret)
 }
 
