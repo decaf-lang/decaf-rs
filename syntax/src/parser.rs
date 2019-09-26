@@ -223,9 +223,9 @@ impl<'p> Parser<'p> {
 
   #[rule(Expr -> LValue)]
   fn expr_lvalue(l: Expr<'p>) -> Expr<'p> { l }
-  #[rule(Expr -> MaybeOwner Id LPar ExprListOrEmpty RPar)]
-  fn expr_call(owner: Option<Box<Expr<'p>>>, name: Token, l: Token, arg: Vec<Expr<'p>>, _r: Token) -> Expr<'p> {
-    mk_expr(l.loc(), Call { func: VarSel { owner, name: name.str(), var: dft() }, arg, func_ref: dft() }.into())
+  #[rule(Expr -> VarSel LPar ExprListOrEmpty RPar)]
+  fn expr_call(func: Expr<'p>, l: Token, arg: Vec<Expr<'p>>, _r: Token) -> Expr<'p> {
+    mk_expr(l.loc(), Call { func: Box::new(func), arg, func_ref: dft() }.into())
   }
   #[rule(Expr -> IntLit)]
   fn expr_int(&mut self, i: Token) -> Expr<'p> { mk_int_lit(i.loc(), i.str(), &mut self.error) }
@@ -316,10 +316,13 @@ impl<'p> Parser<'p> {
   #[rule(MaybeOwner ->)]
   fn maybe_owner0() -> Option<Box<Expr<'p>>> { None }
 
-  #[rule(LValue -> MaybeOwner Id)]
-  fn lvalue_id(owner: Option<Box<Expr<'p>>>, name: Token) -> Expr<'p> {
+  #[rule(VarSel -> MaybeOwner Id)]
+  fn var_sel(owner: Option<Box<Expr<'p>>>, name: Token) -> Expr<'p> {
     mk_expr(name.loc(), VarSel { owner, name: name.str(), var: dft() }.into())
   }
+
+  #[rule(LValue -> VarSel)]
+  fn lvalue_var_sel(e: Expr<'p>) -> Expr<'p> { e }
   #[rule(LValue -> Expr LBrk Expr RBrk)]
   fn lvalue_index(arr: Expr<'p>, l: Token, idx: Expr<'p>, _r: Token) -> Expr<'p> {
     mk_expr(l.loc(), IndexSel { arr: Box::new(arr), idx: Box::new(idx) }.into())

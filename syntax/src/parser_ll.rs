@@ -86,7 +86,7 @@ fn merge_terms<'p>(mut l: Expr<'p>, ts: Terms<'p>) -> Expr<'p> {
 // this is pub because StackItem is pub(maybe you need it? though not very likely)
 pub enum IndexOrIdOrCall<'p> {
   Index(Loc, Expr<'p>),
-  IdOrCall(Loc, &'p str, Option<Vec<Expr<'p>>>),
+  IdOrCall(Loc, &'p str, Option<(Loc, Vec<Expr<'p>>)>),
 }
 
 pub enum NewClassOrArray<'p> {
@@ -399,9 +399,11 @@ impl<'p> Parser<'p> {
       match t {
         IndexOrIdOrCall::Index(loc, idx) =>
           l = mk_expr(loc, IndexSel { arr: Box::new(l), idx: Box::new(idx) }.into()),
-        IndexOrIdOrCall::IdOrCall(loc, name, ioc) => match ioc {
-          Some(arg) =>
-            l = mk_expr(loc, Call { func: VarSel { owner: Some(Box::new(l)), name, var: dft() }, arg, func_ref: dft() }.into()),
+        IndexOrIdOrCall::IdOrCall(loc, name, maybe_call) => match maybe_call {
+          Some((call_loc, arg)) => {
+            let func = Box::new(mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()));
+            l = mk_expr(call_loc, Call { func, arg, func_ref: dft() }.into());
+          }
           None => l = mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()),
         }
       }
@@ -413,11 +415,7 @@ impl<'p> Parser<'p> {
   fn term8_index(l: Token, idx: Expr<'p>, _r: Token, r: Vec<IndexOrIdOrCall<'p>>) -> Vec<IndexOrIdOrCall<'p>> { r.pushed(IndexOrIdOrCall::Index(l.loc(), idx)) }
   #[rule(Term8 -> Dot Id IdOrCall Term8)]
   fn term8_id_or_call(_d: Token, name: Token, arg: Option<(Loc, Vec<Expr<'p>>)>, r: Vec<IndexOrIdOrCall<'p>>) -> Vec<IndexOrIdOrCall<'p>> {
-    if let Some((loc, arg)) = arg {
-      r.pushed(IndexOrIdOrCall::IdOrCall(loc, name.str(), Some(arg)))
-    } else {
-      r.pushed(IndexOrIdOrCall::IdOrCall(name.loc(), name.str(), None))
-    }
+    r.pushed(IndexOrIdOrCall::IdOrCall(name.loc(), name.str(), arg))
   }
   #[rule(Term8 ->)]
   fn term8_0() -> Vec<IndexOrIdOrCall<'p>> { vec![] }
@@ -454,7 +452,10 @@ impl<'p> Parser<'p> {
   #[rule(Expr9 -> Id IdOrCall)]
   fn expr9_id_or_call(name: Token, ioc: Option<(Loc, Vec<Expr<'p>>)>) -> Expr<'p> {
     match ioc {
-      Some((loc, arg)) => mk_expr(loc, Call { func: VarSel { owner: None, name: name.str(), var: dft() }, arg, func_ref: dft() }.into()),
+      Some((loc, arg)) => {
+        let func = Box::new(mk_expr(name.loc(), VarSel { owner: None, name: name.str(), var: dft() }.into()));
+        mk_expr(loc, Call { func, arg, func_ref: dft() }.into())
+      }
       None => mk_expr(name.loc(), VarSel { owner: None, name: name.str(), var: dft() }.into()),
     }
   }

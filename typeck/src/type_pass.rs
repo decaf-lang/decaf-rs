@@ -298,7 +298,7 @@ impl<'a> TypePass<'a> {
   }
 
   fn call(&mut self, c: &'a Call<'a>, loc: Loc) -> Ty<'a> {
-    let v = &c.func;
+    let v = if let ExprKind::VarSel(v) = &c.func.kind { v } else { unimplemented!() };
     match &v.owner {
       Some(owner) => {
         self.cur_used = true;

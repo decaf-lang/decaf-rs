@@ -235,8 +235,8 @@ impl<'a> TacGen<'a> {
         Reg(s1)
       }
       NullLit(_) => Const(0),
-            Call(c) => {
-        let v = &c.func;
+      Call(c) => {
+        let v = if let ExprKind::VarSel(v) = &c.func.kind { v } else { unimplemented!() };
         Reg(match &v.owner {
           Some(o)if o.ty.get().is_arr() => {
             let arr = self.expr(o, f);

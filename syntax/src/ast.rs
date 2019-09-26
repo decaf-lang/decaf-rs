@@ -188,9 +188,9 @@ pub struct IndexSel<'a> {
 }
 
 pub struct Call<'a> {
-  // we don't use func.var, and this VarSel cannot be visited like other VarSel
-  // placing a VarSel here instead of "owner + name" is to make upgrading it to an Expr easier
-  pub func: VarSel<'a>,
+  // the framework only support `func` as VarSel
+  // hint: there are 2 places using `func` as VarSel, and there are 2 unimplemented!() respectively
+  pub func: Box<Expr<'a>>,
   pub arg: Vec<Expr<'a>>,
   pub func_ref: Cell<Option<&'a FuncDef<'a>>>,
 }
