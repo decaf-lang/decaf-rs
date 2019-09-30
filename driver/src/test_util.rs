@@ -26,24 +26,24 @@ const SPIM_INFO_LINE: usize = 1;
 
 // `folder` should be the path of folder containing `pa_path` and other tools
 // `pa_path` should be relevant to `folder`, i.e., `folder`/`pa_path` is the real path to pa folder
-pub fn test_all(folder: impl AsRef<Path>, pa_path: impl AsRef<Path>, pa: Pa) -> io::Result<Vec<TestResult>> {
+pub fn test_all(path: impl AsRef<Path>, pa: Pa) -> io::Result<Vec<TestResult>> {
   // make color work properly on windows(powershell)
   // if it still doesn't work, or you simply dislike the color, add `colored::control::set_override(false);` before calling `test_all`
   #[cfg(target_os = "windows")] let _ = control::set_virtual_terminal(true);
 
-  let folder = folder.as_ref().join(pa_path);
-  let ans = folder.join("result");
-  let out = folder.join("out");
+  let path = path.as_ref();
+  let ans = path.join("result");
+  let out = path.join("out");
   if !out.exists() { fs::create_dir_all(&out)?; }
 
-  let mut files = fs::read_dir(&folder)?.filter_map(|f| {
+  let mut files = fs::read_dir(path)?.filter_map(|f| {
     let path = f.ok()?.path();
     let name = path.file_name()?.to_str()?; // in normal case none of the above 3 ? will fail
     if path.is_file() && name.ends_with(".decaf") { Some(name.to_owned()) } else { None }
   }).collect::<Vec<_>>();
   files.sort_unstable(); // the order of fs::read_dir may be strange, sort them for better debugging
   let ret = files.iter().map(|f| {
-    test_one_caught(folder.join(f), out.join(f).with_extension("result"), ans.join(f).with_extension("result"), pa)
+    test_one_caught(path.join(f), out.join(f).with_extension("result"), ans.join(f).with_extension("result"), pa)
   }).collect();
   Ok(ret)
 }

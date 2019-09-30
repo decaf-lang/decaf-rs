@@ -13,7 +13,6 @@ tac = { path = "../tac" }
 tacgen = { path = "../tacgen" }
 tacopt = { path = "../tacopt" }
 codegen = { path = "../codegen" }
-duct = "0.12.0"
 typed-arena = "1.4.1"
 tacvm = { git = "https://github.com/MashPlant/tacvm" }
 colored = "1.8"
