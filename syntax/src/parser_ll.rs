@@ -83,6 +83,23 @@ fn merge_terms<'p>(mut l: Expr<'p>, ts: Terms<'p>) -> Expr<'p> {
   l
 }
 
+fn merge_idx_id_call<'p>(mut l: Expr<'p>, ts: Vec<IndexOrIdOrCall<'p>>) -> Expr<'p> {
+  for t in ts.into_iter().rev() {
+    match t {
+      IndexOrIdOrCall::Index(loc, idx) =>
+        l = mk_expr(loc, IndexSel { arr: Box::new(l), idx: Box::new(idx) }.into()),
+      IndexOrIdOrCall::IdOrCall(loc, name, maybe_call) => match maybe_call {
+        Some((call_loc, arg)) => {
+          let func = Box::new(mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()));
+          l = mk_expr(call_loc, Call { func, arg, func_ref: dft() }.into());
+        }
+        None => l = mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()),
+      }
+    }
+  }
+  l
+}
+
 // this is pub because StackItem is pub(maybe you need it? though not very likely)
 pub enum IndexOrIdOrCall<'p> {
   Index(Loc, Expr<'p>),
@@ -386,30 +403,24 @@ impl<'p> Parser<'p> {
   #[rule(Term6 ->)]
   fn term6_0() -> Terms<'p> { vec![] }
 
-  #[rule(Expr7 -> Op7 Expr8)] // not, neg
+  #[rule(Expr7 -> Op7 Expr7)] // not, neg
   fn expr7_op8(o: (Loc, UnOp), r: Expr<'p>) -> Expr<'p> {
     mk_expr(o.0, Unary { op: o.1, r: Box::new(r) }.into())
   }
+  #[rule(Expr7 -> LPar ParenOrCast)]
+  fn expr7_par_or_cast(_l: Token, e: Expr<'p>) -> Expr<'p> { e }
   #[rule(Expr7 -> Expr8)]
   fn expr7_8(e: Expr<'p>) -> Expr<'p> { e }
 
-  #[rule(Expr8 -> Expr9 Term8)]
-  fn expr8(mut l: Expr<'p>, ts: Vec<IndexOrIdOrCall<'p>>) -> Expr<'p> {
-    for t in ts.into_iter().rev() {
-      match t {
-        IndexOrIdOrCall::Index(loc, idx) =>
-          l = mk_expr(loc, IndexSel { arr: Box::new(l), idx: Box::new(idx) }.into()),
-        IndexOrIdOrCall::IdOrCall(loc, name, maybe_call) => match maybe_call {
-          Some((call_loc, arg)) => {
-            let func = Box::new(mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()));
-            l = mk_expr(call_loc, Call { func, arg, func_ref: dft() }.into());
-          }
-          None => l = mk_expr(loc, VarSel { owner: Some(Box::new(l)), name, var: dft() }.into()),
-        }
-      }
-    }
-    l
+  #[rule(ParenOrCast -> Expr RPar Term8)]
+  fn paren_or_cast_p(l: Expr<'p>, _r: Token, ts: Vec<IndexOrIdOrCall<'p>>) -> Expr<'p> { merge_idx_id_call(l, ts) }
+  #[rule(ParenOrCast -> Class Id RPar Expr7)]
+  fn paren_or_cast_c(_c: Token, name: Token, _r: Token, e: Expr<'p>) -> Expr<'p> {
+    mk_expr(e.loc, ClassCast { name: name.str(), expr: Box::new(e), class: dft() }.into())
   }
+
+  #[rule(Expr8 -> Expr9 Term8)]
+  fn expr8(l: Expr<'p>, ts: Vec<IndexOrIdOrCall<'p>>) -> Expr<'p> { merge_idx_id_call(l, ts) }
 
   #[rule(Term8 -> LBrk Expr RBrk Term8)]
   fn term8_index(l: Token, idx: Expr<'p>, _r: Token, r: Vec<IndexOrIdOrCall<'p>>) -> Vec<IndexOrIdOrCall<'p>> { r.pushed(IndexOrIdOrCall::Index(l.loc(), idx)) }
@@ -467,8 +478,6 @@ impl<'p> Parser<'p> {
       NewClassOrArray::NewArray(elem, len) => mk_expr(loc, NewArray { elem, len: Box::new(len) }.into()),
     }
   }
-  #[rule(Expr9 -> LPar ParenOrCast)]
-  fn expr9_paren_or_cast(_l: Token, e: Expr<'p>) -> Expr<'p> { e }
 
   #[rule(NewClassOrArray -> Id LPar RPar)]
   fn new_class_or_array_c(name: Token, _l: Token, _r: Token) -> NewClassOrArray<'p> {
@@ -478,13 +487,6 @@ impl<'p> Parser<'p> {
   fn new_class_or_array_a(mut ty: SynTy<'p>, _l: Token, dim_len: (u32, Expr<'p>)) -> NewClassOrArray<'p> {
     ty.arr = dim_len.0;
     NewClassOrArray::NewArray(ty, dim_len.1)
-  }
-
-  #[rule(ParenOrCast -> Expr RPar)]
-  fn paren_or_cast_p(e: Expr<'p>, _r: Token) -> Expr<'p> { e }
-  #[rule(ParenOrCast -> Class Id RPar Expr9)]
-  fn paren_or_cast_c(_c: Token, name: Token, _r: Token, e: Expr<'p>) -> Expr<'p> {
-    mk_expr(e.loc, ClassCast { name: name.str(), expr: Box::new(e), class: dft() }.into())
   }
 
   #[rule(NewArrayRem -> RBrk LBrk NewArrayRem)]
