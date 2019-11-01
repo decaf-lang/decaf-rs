@@ -1,42 +1,36 @@
+use std::iter;
 use common::Loc;
-use syntax::{ScopeOwner, Symbol, ClassDef};
+use syntax::{ScopeOwner, Symbol, ClassDef, Program};
 
 pub(crate) struct ScopeStack<'a> {
-  pub stack: Vec<ScopeOwner<'a>>,
+  // `global` must be ScopeOwner::Global, but we will not depend on this, so just define it as ScopeOwner
+  global: ScopeOwner<'a>,
+  stack: Vec<ScopeOwner<'a>>,
 }
 
 impl<'a> ScopeStack<'a> {
-  pub fn lookup(&self, name: &'a str, recursive: bool) -> Option<(Symbol<'a>, ScopeOwner<'a>)> {
-    if recursive {
-      for owner in self.stack.iter().rev() {
-        if let Some(&symbol) = owner.scope().get(name) {
-          return Some((symbol, *owner));
-        }
-      }
-      None
-    } else {
-      self.stack.last().unwrap().scope().get(name)
-        .map(|&symbol| (symbol, *self.stack.last().unwrap()))
-    }
+  pub fn new(p: &'a Program<'a>) -> Self {
+    Self { global: ScopeOwner::Global(p), stack: vec![] }
   }
 
+  pub fn lookup(&self, name: &'a str) -> Option<(Symbol<'a>, ScopeOwner<'a>)> {
+    self.stack.iter().rev().chain(iter::once(&self.global))
+      .filter_map(|&owner| owner.scope().get(name).map(|&sym| (sym, owner)))
+      .next()
+  }
+
+  // do lookup, but will ignore those local symbols whose loc >= the given loc
   pub fn lookup_before(&self, name: &'a str, loc: Loc) -> Option<Symbol<'a>> {
-    for owner in self.stack.iter().rev() {
-      let symbols = owner.scope();
-      if let Some(&symbol) = symbols.get(name) {
-        if owner.is_local() && symbol.loc() >= loc {
-          continue;
-        }
-        return Some(symbol);
-      }
-    }
-    None
+    self.stack.iter().rev().chain(iter::once(&self.global))
+      .filter_map(|&owner| owner.scope().get(name).cloned().filter(|sym| !(owner.is_local() && sym.loc() >= loc)))
+      .next()
   }
 
-  pub fn declare(&mut self, symbol: Symbol<'a>) {
-    self.stack.last().unwrap().scope_mut().insert(symbol.name(), symbol);
+  pub fn declare(&mut self, sym: Symbol<'a>) {
+    self.cur_owner().scope_mut().insert(sym.name(), sym);
   }
 
+  // if `owner` is ScopeOwner::Class, then will recursively open all its ancestors
   pub fn open(&mut self, owner: ScopeOwner<'a>) {
     if let ScopeOwner::Class(c) = owner {
       if let Some(p) = c.parent_ref.get() {
@@ -46,20 +40,20 @@ impl<'a> ScopeStack<'a> {
     self.stack.push(owner);
   }
 
+  // the global scope is not affected
   pub fn close(&mut self) {
     let owner = self.stack.pop().unwrap();
     if let ScopeOwner::Class(_) = owner {
-      // all stack in the stack except the bottom are parent of the class
-      for _ in 1..self.stack.len() { self.stack.pop(); }
+      self.stack.clear(); // all scopes in the stack is its ancestors
     }
   }
 
   pub fn cur_owner(&self) -> ScopeOwner<'a> {
-    *self.stack.last().unwrap()
+    *self.stack.last().unwrap_or(&self.global)
   }
 
   pub fn lookup_class(&self, name: &'a str) -> Option<&'a ClassDef<'a>> {
-    self.stack[0].scope().get(name).map(|class| match class {
+    self.global.scope().get(name).map(|class| match class {
       Symbol::Class(c) => *c,
       _ => unreachable!("Global scope should only contain classes."),
     })

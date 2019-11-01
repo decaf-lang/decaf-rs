@@ -34,7 +34,7 @@ impl<'p> Parser<'p> {
     }
   }
 
-  // parse impl with some error recovering, called be the generated `parse` function
+  // parse impl with some error recovering, called by the generated `parse` function
   fn _parse<'l: 'p>(&mut self, target: u32, lookahead: &mut Token<'l>, lexer: &mut Lexer<'l>, f: &HashSet<u32>) -> StackItem<'p> {
     let target = target as usize;
     // these are some global variables which may be invisible to IDE, so fetch them here for convenience

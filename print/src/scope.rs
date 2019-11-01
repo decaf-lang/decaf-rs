@@ -3,7 +3,7 @@ use syntax::{ast::*, Scope};
 use std::fmt::Write;
 
 fn show_scope(s: &Scope, p: &mut IndentPrinter) {
-  let mut s = s.iter().map(|(_, symbol)| *symbol).collect::<Vec<_>>();
+  let mut s = s.iter().map(|(_, &sym)| sym).collect::<Vec<_>>();
   s.sort_unstable_by_key(|x| x.loc());
   if s.is_empty() { write!(p, "<empty>").ignore(); } else { for s in s { write!(p, "{:?}", s).ignore(); } }
 }

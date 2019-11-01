@@ -12,31 +12,6 @@ pub enum Symbol<'a> {
   Class(&'a ClassDef<'a>),
 }
 
-#[derive(Copy, Clone)]
-pub enum ScopeOwner<'a> {
-  Local(&'a Block<'a>),
-  Param(&'a FuncDef<'a>),
-  Class(&'a ClassDef<'a>),
-  Global(&'a Program<'a>),
-}
-
-impl<'a> ScopeOwner<'a> {
-  // boilerplate code...
-  pub fn scope(&self) -> Ref<'a, Scope<'a>> {
-    use ScopeOwner::*;
-    match self { Local(x) => x.scope.borrow(), Param(x) => x.scope.borrow(), Class(x) => x.scope.borrow(), Global(x) => x.scope.borrow(), }
-  }
-
-  pub fn scope_mut(&self) -> RefMut<'a, Scope<'a>> {
-    use ScopeOwner::*;
-    match self { Local(x) => x.scope.borrow_mut(), Param(x) => x.scope.borrow_mut(), Class(x) => x.scope.borrow_mut(), Global(x) => x.scope.borrow_mut(), }
-  }
-
-  pub fn is_local(&self) -> bool { if let ScopeOwner::Local(_) = self { true } else { false } }
-  pub fn is_param(&self) -> bool { if let ScopeOwner::Param(_) = self { true } else { false } }
-  pub fn is_class(&self) -> bool { if let ScopeOwner::Class(_) = self { true } else { false } }
-}
-
 impl<'a> Symbol<'a> {
   pub fn name(&self) -> &'a str {
     match self {
@@ -64,6 +39,37 @@ impl<'a> Symbol<'a> {
       Symbol::Class(c) => Ty::mk_obj(c),
     }
   }
+
+  pub fn is_var(&self) -> bool { if let Symbol::Var(_) = self { true } else { false } }
+  pub fn is_func(&self) -> bool { if let Symbol::Func(_) = self { true } else { false } }
+  pub fn is_this(&self) -> bool { if let Symbol::This(_) = self { true } else { false } }
+  pub fn is_class(&self) -> bool { if let Symbol::Class(_) = self { true } else { false } }
+}
+
+#[derive(Copy, Clone)]
+pub enum ScopeOwner<'a> {
+  Local(&'a Block<'a>),
+  Param(&'a FuncDef<'a>),
+  Class(&'a ClassDef<'a>),
+  Global(&'a Program<'a>),
+}
+
+impl<'a> ScopeOwner<'a> {
+  // boilerplate code...
+  pub fn scope(&self) -> Ref<'a, Scope<'a>> {
+    use ScopeOwner::*;
+    match self { Local(x) => x.scope.borrow(), Param(x) => x.scope.borrow(), Class(x) => x.scope.borrow(), Global(x) => x.scope.borrow(), }
+  }
+
+  pub fn scope_mut(&self) -> RefMut<'a, Scope<'a>> {
+    use ScopeOwner::*;
+    match self { Local(x) => x.scope.borrow_mut(), Param(x) => x.scope.borrow_mut(), Class(x) => x.scope.borrow_mut(), Global(x) => x.scope.borrow_mut(), }
+  }
+
+  pub fn is_local(&self) -> bool { if let ScopeOwner::Local(_) = self { true } else { false } }
+  pub fn is_param(&self) -> bool { if let ScopeOwner::Param(_) = self { true } else { false } }
+  pub fn is_class(&self) -> bool { if let ScopeOwner::Class(_) = self { true } else { false } }
+  pub fn is_global(&self) -> bool { if let ScopeOwner::Global(_) = self { true } else { false } }
 }
 
 impl fmt::Debug for Symbol<'_> {

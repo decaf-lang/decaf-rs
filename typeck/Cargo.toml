@@ -8,3 +8,4 @@ edition = "2018"
 common = { path = "../common" }
 syntax = { path = "../syntax" }
 typed-arena = "1.4.1"
+hashbrown = { version = "0.5", features = ["nightly"] }
