@@ -19,8 +19,9 @@ impl<'a, Ty> Errors<'a, Ty> {
     Default::default()
   }
 
+  // guarantee to be stable, because there may be multiple errors in one loc
   pub fn sorted(mut self) -> Self {
-    self.0.sort_unstable_by_key(|e| e.0);
+    self.0.sort_by_key(|e| e.0);
     self
   }
 }
@@ -69,7 +70,6 @@ pub enum ErrorKind<'a, Ty> {
   NewArrayNotInt,
   IndexNotArray,
   IndexNotInt,
-  UnreachableCode,
   NoReturn,
 }
 
@@ -111,7 +111,6 @@ impl<Ty: fmt::Debug> fmt::Debug for ErrorKind<'_, Ty> {
       NewArrayNotInt => write!(f, "new array length must be an integer"),
       IndexNotArray => write!(f, "[] can only be applied to arrays"),
       IndexNotInt => write!(f, "array subscript must be an integer"),
-      UnreachableCode => write!(f, "unreachable code"),
       NoReturn => write!(f, "missing return statement: control reaches end of non-void block"),
     }
   }

@@ -92,24 +92,19 @@ impl fmt::Debug for Ty<'_> {
       TyKind::Error => write!(f, "error"), // we don't expect to reach this case in printing scope info
       TyKind::Null => write!(f, "null"),
       TyKind::Object(c) | TyKind::Class(c) => write!(f, "class {}", c.name),
-      TyKind::Func(ret_param) => show_func_ty(ret_param[1..].iter().cloned(), ret_param[0], self.is_arr(), f),
+      // the printing format may be different from other experiment framework's
+      // it is not because their format is hard to implement in rust, but because I simply don't like their format,
+      // which introduces unnecessary complexity, and doesn't increase readability
+      TyKind::Func(ret_param) => {
+        let (ret, param) = (ret_param[0], &ret_param[1..]);
+        write!(f, "{:?}(", ret)?;
+        for (idx, p) in param.iter().enumerate() {
+          write!(f, "{:?}{}", p, if idx + 1 == param.len() { "" } else { ", " })?;
+        }
+        write!(f, ")")
+      }
     }?;
     for _ in 0..self.arr { write!(f, "[]")?; }
     Ok(())
   }
-}
-
-pub fn show_func_ty<'a>(mut param: impl Iterator<Item=Ty<'a>>, ret: Ty, is_arr: bool, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-  if is_arr { write!(f, "(")?; } // [] have higher priority than T => T, so add () here, make it (T => T)[]
-  // param number: 0 => "()", 1 => "T", >=2 => "(T0, T1, ...)"
-  if let Some(p0) = param.next() {
-    if let Some(p1) = param.next() {
-      write!(f, "({:?}", p0)?;
-      write!(f, ", {:?}", p1)?;
-      for p in param { write!(f, ", {:?}", p)?; }
-      write!(f, ")")?;
-    } else { write!(f, "{:?}", p0)?; }
-  } else { write!(f, "()")?; }
-  write!(f, " => {:?}", ret)?;
-  if is_arr { write!(f, ")") } else { Ok(()) }
 }

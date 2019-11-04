@@ -33,21 +33,9 @@ impl<'a> TypePass<'a> {
     });
   }
 
-  // whether this block has a return value depends on the first stmt in this block that has a return value or is a Break
-  // it has a return yes => block has, it is a Break => no, there is no such stmt => no
-  // in addition, if this stmt is not the last stmt, an UnreachableCode error should be reported
   fn block(&mut self, b: &'a Block<'a>) -> bool {
     let mut ret = false;
-    let (mut ended, mut issued) = (false, false);
-    self.scoped(ScopeOwner::Local(b), |s| for st in &b.stmt {
-      if ended && !issued {
-        issued = true;
-        s.issue(st.loc, ErrorKind::UnreachableCode)
-      }
-      let t = s.stmt(st);
-      if !ended { ret = t; }
-      ended = ret || match st.kind { StmtKind::Break(_) => true, _ => false };
-    });
+    self.scoped(ScopeOwner::Local(b), |s| for st in &b.stmt { ret = s.stmt(st); });
     ret
   }
 
@@ -99,18 +87,11 @@ impl<'a> TypePass<'a> {
       }),
       StmtKind::Return(r) => {
         let expect = self.cur_func.unwrap().ret_ty();
-        if let Some(e) = r {
-          let actual = self.expr(e);
-          if !actual.assignable_to(expect) {
-            self.issue(s.loc, ReturnMismatch { actual, expect })
-          }
-          true
-        } else {
-          if expect != Ty::void() {
-            self.issue(s.loc, ReturnMismatch { actual: Ty::void(), expect })
-          }
-          false
+        let actual = if let Some(e) = r { self.expr(e) } else { Ty::void() };
+        if !actual.assignable_to(expect) {
+          self.issue(s.loc, ReturnMismatch { actual, expect })
         }
+        actual != Ty::void()
       }
       StmtKind::Print(p) => {
         for (i, e) in p.iter().enumerate() {
@@ -152,16 +133,14 @@ impl<'a> TypePass<'a> {
       Call(c) => self.call(c, e.loc),
       Unary(u) => self.unary(u, e.loc),
       Binary(b) => self.binary(b, e.loc),
-      This(_) => if !self.cur_func.unwrap().static_ {
+      This(_) => {
+        if self.cur_func.unwrap().static_ { self.issue(e.loc, ThisInStatic) }
         Ty::mk_obj(self.cur_class.unwrap())
-      } else { self.issue(e.loc, ThisInStatic) }
-      NewClass(n) => match self.scopes.lookup_class(n.name) {
-        Some(c) => {
-          n.class.set(Some(c));
-          Ty::mk_obj(c)
-        }
-        None => self.issue(e.loc, NoSuchClass(n.name)),
-      },
+      }
+      NewClass(n) => if let Some(c) = self.scopes.lookup_class(n.name) {
+        n.class.set(Some(c));
+        Ty::mk_obj(c)
+      } else { self.issue(e.loc, NoSuchClass(n.name)) },
       NewArray(n) => {
         let len = self.expr(&n.len);
         if len != Ty::int() && len != Ty::error() {
@@ -174,26 +153,20 @@ impl<'a> TypePass<'a> {
         if src != Ty::error() && !src.is_object() {
           self.issue(e.loc, NotObject { owner: src })
         }
-        match self.scopes.lookup_class(c.name) {
-          Some(class) => {
-            c.class.set(Some(class));
-            Ty::bool()
-          }
-          None => self.issue(e.loc, NoSuchClass(c.name)),
-        }
+        if let Some(cl) = self.scopes.lookup_class(c.name) {
+          c.class.set(Some(cl));
+          Ty::bool()
+        } else { self.issue(e.loc, NoSuchClass(c.name)) }
       }
       ClassCast(c) => {
         let src = self.expr(&c.expr);
         if src != Ty::error() && !src.is_object() {
           self.issue(e.loc, NotObject { owner: src })
         }
-        match self.scopes.lookup_class(c.name) {
-          Some(class) => {
-            c.class.set(Some(class));
-            Ty::mk_obj(class)
-          }
-          None => self.issue(e.loc, NoSuchClass(c.name)),
-        }
+        if let Some(cl) = self.scopes.lookup_class(c.name) {
+          c.class.set(Some(cl));
+          Ty::mk_obj(cl)
+        } else { self.issue(e.loc, NoSuchClass(c.name)) }
       }
     };
     e.ty.set(ty);
@@ -235,98 +208,91 @@ impl<'a> TypePass<'a> {
   }
 
   fn var_sel(&mut self, v: &'a VarSel<'a>, loc: Loc) -> Ty<'a> {
-    // not found(no owner) or sole ClassName => UndeclaredVar
-    // refer to field in static function => RefInStatic
-    // <not object>.a (Main.a, 1.a, func.a) => BadFieldAssess
-    // access a field that doesn't belong to self & ancestors => PrivateFieldAccess
-    // given owner but not found object.a => NoSuchField
+    // (no owner)not_found_var / ClassName<ns> / (no owner)method => UndeclaredVar
+    // object.not_found_var => NoSuchField
+    // (no owner)field_var && cur function is static => RefInStatic
+    // <not object>.a (e.g.: Class.a, 1.a) / object.method => BadFieldAccess
+    // object.field_var, where object's class is not self or any of ancestors => PrivateFieldAccess
 
-    match &v.owner {
-      Some(o) => {
-        self.cur_used = true;
-        let o_t = self.expr(o);
-        self.cur_used = false;
-        match o_t {
-          Ty { arr: 0, kind: TyKind::Object(Ref(c)) } => match c.lookup(v.name) {
-            Some(sym) => {
-              match sym {
-                Symbol::Var(var) => {
-                  v.var.set(Some(var));
-                  // only allow self & descendents to access field
-                  if !self.cur_class.unwrap().extends(c) {
-                    self.issue(loc, PrivateFieldAccess { name: v.name, owner: o_t })
-                  }
-                  var.ty.get()
-                }
-                _ => sym.ty(),
-              }
-            }
-            None => self.issue(loc, NoSuchField { name: v.name, owner: o_t })
-          }
-          e if e == Ty::error() => Ty::error(),
-          _ => self.issue(loc, BadFieldAccess { name: v.name, owner: o_t }),
-        }
-      }
-      None => {
-        // if this expr is in an VarDef, it cannot access the variable that is being declared
-        let ret = match self.scopes.lookup_before(v.name, self.cur_var_def.map(|v| v.loc).unwrap_or(loc)) {
-          Some(sym) => match sym {
+    if let Some(owner) = &v.owner {
+      self.cur_used = true;
+      let owner = self.expr(owner);
+      self.cur_used = false;
+      match owner {
+        Ty { arr: 0, kind: TyKind::Object(Ref(c)) } => if let Some(sym) = c.lookup(v.name) {
+          match sym {
             Symbol::Var(var) => {
               v.var.set(Some(var));
-              if var.owner.get().unwrap().is_class() {
-                let cur = self.cur_func.unwrap();
-                if cur.static_ {
-                  self.issue(loc, RefInStatic { field: v.name, func: cur.name })
-                }
+              // only allow self & descendents to access field
+              if !self.cur_class.unwrap().extends(c) {
+                self.issue(loc, PrivateFieldAccess { name: v.name, owner })
               }
               var.ty.get()
             }
-            Symbol::Func(f) => Ty::mk_func(f),
-            Symbol::This(f) => Ty::mk_obj(f.class.get().unwrap()),
-            Symbol::Class(c) => {
-              if !self.cur_used {
-                self.issue(loc, UndeclaredVar(v.name))
-              } else { Ty::mk_class(c) }
-            }
+            _ => self.issue(loc, BadFieldAccess { name: v.name, owner }),
           }
-          None => self.issue(loc, UndeclaredVar(v.name)),
-        };
-        ret
+        } else { self.issue(loc, NoSuchField { name: v.name, owner }) },
+        e => if e == Ty::error() { Ty::error() } else { self.issue(loc, BadFieldAccess { name: v.name, owner }) }
       }
+    } else {
+      // if this stmt is in an VarDef, it cannot access the variable that is being declared
+      if let Some(sym) = self.scopes.lookup_before(v.name, self.cur_var_def.map(|v| v.loc).unwrap_or(loc)) {
+        match sym {
+          Symbol::Var(var) => {
+            v.var.set(Some(var));
+            if var.owner.get().unwrap().is_class() {
+              let cur = self.cur_func.unwrap();
+              if cur.static_ {
+                self.issue(loc, RefInStatic { field: v.name, func: cur.name })
+              }
+            }
+            var.ty.get()
+          }
+          Symbol::Class(c) if self.cur_used => { Ty::mk_class(c) }
+          _ => self.issue(loc, UndeclaredVar(v.name)),
+        }
+      } else { self.issue(loc, UndeclaredVar(v.name)) }
     }
   }
 
   fn call(&mut self, c: &'a Call<'a>, loc: Loc) -> Ty<'a> {
     let v = if let ExprKind::VarSel(v) = &c.func.kind { v } else { unimplemented!() };
-    match &v.owner {
-      Some(owner) => {
-        self.cur_used = true;
-        let owner = self.expr(owner);
-        self.cur_used = false;
-        if owner == Ty::error() { return Ty::error(); }
-        if v.name == LENGTH && owner.is_arr() {
-          if !c.arg.is_empty() {
-            self.issue(loc, LengthWithArgument(c.arg.len() as u32))
-          }
-          return Ty::int();
+    let owner = if let Some(owner) = &v.owner {
+      self.cur_used = true;
+      let owner = self.expr(owner);
+      self.cur_used = false;
+      if owner == Ty::error() { return Ty::error(); }
+      if v.name == LENGTH && owner.is_arr() {
+        if !c.arg.is_empty() {
+          self.issue(loc, LengthWithArgument(c.arg.len() as u32))
         }
-        match owner.kind {
-          TyKind::Class(cl) | TyKind::Object(cl) => if let Some(sym) = cl.lookup(v.name) {
-            self.check_normal_call(v, c, owner, sym, loc)
-          } else {
-            self.issue(loc, NoSuchField { name: v.name, owner })
-          }
-          _ => self.issue(loc, BadFieldAccess { name: v.name, owner }),
-        }
+        return Ty::int();
       }
-      None => {
-        let cur = self.cur_class.unwrap();
-        if let Some(sym) = cur.lookup(v.name) {
-          self.check_normal_call(v, c, Ty::mk_obj(cur), sym, loc)
-        } else {
-          self.issue(loc, NoSuchField { name: v.name, owner: Ty::mk_obj(cur) })
-        }
+      owner
+    } else { Ty::mk_obj(self.cur_class.unwrap()) };
+    match owner {
+      Ty { arr: 0, kind: TyKind::Object(Ref(cl)) } | Ty { arr: 0, kind: TyKind::Class(Ref(cl)) } => {
+        if let Some(sym) = cl.lookup(v.name) {
+          match sym {
+            Symbol::Func(f) => {
+              c.func_ref.set(Some(f));
+              if owner.is_class() && !f.static_ {
+                // Class.not_static_method()
+                self.issue(loc, BadFieldAccess { name: v.name, owner })
+              }
+              if v.owner.is_none() {
+                let cur = self.cur_func.unwrap();
+                if cur.static_ && !f.static_ {
+                  self.issue(loc, RefInStatic { field: f.name, func: cur.name })
+                }
+              }
+              self.check_arg_param(&c.arg, f.ret_param_ty.get().unwrap(), f.name, loc)
+            }
+            _ => self.issue(loc, NotFunc { name: v.name, owner }),
+          }
+        } else { self.issue(loc, NoSuchField { name: v.name, owner }) }
       }
+      _ => self.issue(loc, BadFieldAccess { name: v.name, owner }),
     }
   }
 }
@@ -334,40 +300,22 @@ impl<'a> TypePass<'a> {
 impl<'a> TypePass<'a> {
   fn check_bool(&mut self, e: &'a Expr<'a>) {
     let ty = self.expr(e);
-    if ty != Ty::bool() && ty != Ty::error() {
-      self.issue(e.loc, TestNotBool)
-    }
+    if ty != Ty::bool() && ty != Ty::error() { self.issue(e.loc, TestNotBool) }
   }
 
-  fn check_normal_call(&mut self, v: &'a VarSel<'a>, c: &'a Call<'a>, owner: Ty<'a>, sym: Symbol<'a>, loc: Loc) -> Ty<'a> {
-    match sym {
-      Symbol::Func(f) => {
-        c.func_ref.set(Some(f));
-        match &v.owner {
-          Some(_) => if owner.is_class() && !f.static_ {
-            // call a instance method through class name
-            self.issue(loc, BadFieldAccess { name: v.name, owner })
-          }
-          None => {
-            let cur = self.cur_func.unwrap();
-            if cur.static_ && !f.static_ {
-              self.issue(loc, RefInStatic { field: f.name, func: cur.name })
-            }
-          }
-        };
-        if f.param.len() != c.arg.len() {
-          self.issue(loc, ArgcMismatch { name: v.name, expect: f.param.len() as u32, actual: c.arg.len() as u32 })
-        } else {
-          for (idx, (arg, param)) in c.arg.iter().zip(f.param.iter()).enumerate() {
-            let arg = self.expr(arg);
-            if !arg.assignable_to(param.ty.get()) {
-              self.issue(c.arg[idx].loc, ArgMismatch { loc: idx as u32 + 1, arg, param: param.ty.get() })
-            }
-          }
-        }
-        f.ret_ty()
-      }
-      _ => self.issue(loc, NotFunc { name: v.name, owner }),
+  fn check_arg_param(&mut self, arg: &'a [Expr<'a>], ret_param: &[Ty<'a>], name: &'a str, loc: Loc) -> Ty<'a> {
+    let (ret, param) = (ret_param[0], &ret_param[1..]);
+    if param.len() != arg.len() {
+      self.issue(loc, ArgcMismatch { name, expect: param.len() as u32, actual: arg.len() as u32 })
     }
+    for (idx, arg0) in arg.iter().enumerate() {
+      let arg = self.expr(arg0);
+      if let Some(&param) = param.get(idx) {
+        if !arg.assignable_to(param) {
+          self.issue(arg0.loc, ArgMismatch { loc: idx as u32 + 1, arg, param })
+        }
+      }
+    }
+    ret
   }
 }

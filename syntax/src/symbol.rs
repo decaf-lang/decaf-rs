@@ -1,4 +1,4 @@
-use crate::{Block, ClassDef, FuncDef, VarDef, Program, Ty, show_func_ty};
+use crate::{Block, ClassDef, FuncDef, VarDef, Program, Ty};
 use common::{Loc, HashMap};
 use std::{cell::{RefMut, Ref}, fmt};
 
@@ -75,12 +75,8 @@ impl<'a> ScopeOwner<'a> {
 impl fmt::Debug for Symbol<'_> {
   fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
     match self {
-      Symbol::Var(v) => write!(f, "{:?} -> variable {}{} : {:?}", v.loc,
-                               if v.owner.get().unwrap().is_param() { "@" } else { "" }, v.name, v.ty.get()),
-      Symbol::Func(fu) => {
-        write!(f, "{:?} -> {}function {} : ", fu.loc, if fu.static_ { "STATIC " } else { "" }, fu.name)?;
-        show_func_ty(fu.param.iter().map(|v|v.ty.get()), fu.ret_ty(), false, f)
-      }
+      Symbol::Var(v) => write!(f, "{:?} -> variable {}{} : {:?}", v.loc, if v.owner.get().unwrap().is_param() { "@" } else { "" }, v.name, v.ty.get()),
+      Symbol::Func(fu) => write!(f, "{:?} -> {}function {} : {:?}", fu.loc, if fu.static_ { "STATIC " } else { "" }, fu.name, Ty::mk_func(fu)),
       Symbol::This(fu) => write!(f, "{:?} -> variable @this : class {}", fu.loc, fu.class.get().unwrap().name),
       Symbol::Class(c) => {
         write!(f, "{:?} -> class {}", c.loc, c.name)?;

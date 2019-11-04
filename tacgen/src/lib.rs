@@ -238,7 +238,7 @@ impl<'a> TacGen<'a> {
       Call(c) => {
         let v = if let ExprKind::VarSel(v) = &c.func.kind { v } else { unimplemented!() };
         Reg(match &v.owner {
-          Some(o)if o.ty.get().is_arr() => {
+          Some(o) if o.ty.get().is_arr() => {
             let arr = self.expr(o, f);
             self.length(arr, f)
           }
@@ -256,10 +256,8 @@ impl<'a> TacGen<'a> {
               }
               f.push(TacKind::Call { dst: ret, kind: CallKind::Static(self.func_info[&Ref(fu)].idx, hint) });
             } else {
-              let owner = match &v.owner {
-                Some(o) => self.expr(o, f),
-                None => Reg(0), // this(i.owner is not set during typeck)
-              };
+              // Reg(0) is `this`
+              let owner = v.owner.as_ref().map(|o| self.expr(o, f)).unwrap_or(Reg(0));
               f.push(Param { src: [owner] });
               for a in args {
                 f.push(Param { src: [a] });
