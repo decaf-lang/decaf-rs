@@ -46,6 +46,14 @@ pub struct Ty<'a> {
 }
 
 impl<'a> Ty<'a> {
+  // make a type with array dimension = 0
+  pub const fn new(kind: TyKind<'a>) -> Ty<'a> { Ty { arr: 0, kind } }
+
+  // like Errors::issue, it can save some typing by returning a default value
+  pub fn error_or<T: Default>(self, mut f: impl FnMut() -> T) -> T {
+    if self == Ty::error() { T::default() } else { f() }
+  }
+
   pub fn assignable_to(&self, rhs: Ty<'a>) -> bool {
     use TyKind::*;
     match (self.kind, rhs.kind) {
@@ -65,17 +73,18 @@ impl<'a> Ty<'a> {
 
   // why don't use const items?
   // it seems that const items can only have type Ty<'static>, which can NOT be casted to Ty<'a>
-  pub const fn error() -> Ty<'a> { Ty { arr: 0, kind: TyKind::Error } }
-  pub const fn null() -> Ty<'a> { Ty { arr: 0, kind: TyKind::Null } }
-  pub const fn int() -> Ty<'a> { Ty { arr: 0, kind: TyKind::Int } }
-  pub const fn bool() -> Ty<'a> { Ty { arr: 0, kind: TyKind::Bool } }
-  pub const fn void() -> Ty<'a> { Ty { arr: 0, kind: TyKind::Void } }
-  pub const fn string() -> Ty<'a> { Ty { arr: 0, kind: TyKind::String } }
+  pub const fn error() -> Ty<'a> { Ty::new(TyKind::Error) }
+  pub const fn null() -> Ty<'a> { Ty::new(TyKind::Null) }
+  pub const fn int() -> Ty<'a> { Ty::new(TyKind::Int) }
+  pub const fn bool() -> Ty<'a> { Ty::new(TyKind::Bool) }
+  pub const fn void() -> Ty<'a> { Ty::new(TyKind::Void) }
+  pub const fn string() -> Ty<'a> { Ty::new(TyKind::String) }
 
-  pub fn mk_obj(c: &'a ClassDef<'a>) -> Ty<'a> { Ty { arr: 0, kind: TyKind::Object(Ref(c)) } }
-  pub fn mk_class(c: &'a ClassDef<'a>) -> Ty<'a> { Ty { arr: 0, kind: TyKind::Class(Ref(c)) } }
-  pub fn mk_func(f: &'a FuncDef<'a>) -> Ty<'a> { Ty { arr: 0, kind: TyKind::Func(f.ret_param_ty.get().unwrap()) } }
+  pub fn mk_obj(c: &'a ClassDef<'a>) -> Ty<'a> { Ty::new(TyKind::Object(Ref(c))) }
+  pub fn mk_class(c: &'a ClassDef<'a>) -> Ty<'a> { Ty::new(TyKind::Class(Ref(c))) }
+  pub fn mk_func(f: &'a FuncDef<'a>) -> Ty<'a> { Ty::new(TyKind::Func(f.ret_param_ty.get().unwrap())) }
 
+  // if you want something like `is_void()`, just use `== Ty::void()`
   pub fn is_arr(&self) -> bool { self.arr > 0 }
   pub fn is_func(&self) -> bool { self.arr == 0 && if let TyKind::Func(_) = self.kind { true } else { false } }
   pub fn is_class(&self) -> bool { self.arr == 0 && if let TyKind::Class(_) = self.kind { true } else { false } }

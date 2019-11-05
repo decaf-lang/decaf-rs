@@ -25,10 +25,8 @@ impl<'a> TypePass<'a> {
     self.scoped(ScopeOwner::Class(c), |s| for f in &c.field {
       if let FieldDef::FuncDef(f) = f {
         s.cur_func = Some(f);
-        let t = s.scoped(ScopeOwner::Param(f), |s| s.block(&f.body));
-        if !t && f.ret_ty() != Ty::void() {
-          s.issue(f.body.loc, ErrorKind::NoReturn)
-        }
+        let ret = s.scoped(ScopeOwner::Param(f), |s| s.block(&f.body));
+        if !ret && f.ret_ty() != Ty::void() { s.issue(f.body.loc, ErrorKind::NoReturn) }
       };
     });
   }
@@ -44,18 +42,14 @@ impl<'a> TypePass<'a> {
     match &s.kind {
       StmtKind::Assign(a) => {
         let (l, r) = (self.expr(&a.dst), self.expr(&a.src));
-        if l.is_func() || !r.assignable_to(l) {
-          self.issue(s.loc, IncompatibleBinary { l, op: "=", r })
-        }
+        if !r.assignable_to(l) { self.issue(s.loc, IncompatibleBinary { l, op: "=", r }) }
         false
       }
       StmtKind::LocalVarDef(v) => {
         self.cur_var_def = Some(v);
         if let Some((loc, e)) = &v.init {
           let (l, r) = (v.ty.get(), self.expr(e));
-          if !r.assignable_to(l) {
-            self.issue(*loc, IncompatibleBinary { l, op: "=", r })
-          }
+          if !r.assignable_to(l) { self.issue(*loc, IncompatibleBinary { l, op: "=", r }) }
         }
         self.cur_var_def = None;
         false
@@ -67,9 +61,8 @@ impl<'a> TypePass<'a> {
       StmtKind::Skip(_) => false,
       StmtKind::If(i) => {
         self.check_bool(&i.cond);
-        let s1 = self.block(&i.on_true);
-        let s2 = if let Some(of) = &i.on_false { self.block(of) } else { false };
-        s1 && s2
+        // `&` is not short-circuit evaluated
+        self.block(&i.on_true) & i.on_false.as_ref().map(|b| self.block(b)).unwrap_or(false)
       }
       StmtKind::While(w) => {
         self.check_bool(&w.cond);
@@ -87,17 +80,15 @@ impl<'a> TypePass<'a> {
       }),
       StmtKind::Return(r) => {
         let expect = self.cur_func.unwrap().ret_ty();
-        let actual = if let Some(e) = r { self.expr(e) } else { Ty::void() };
-        if !actual.assignable_to(expect) {
-          self.issue(s.loc, ReturnMismatch { actual, expect })
-        }
+        let actual = r.as_ref().map(|e| self.expr(e)).unwrap_or(Ty::void());
+        if !actual.assignable_to(expect) { self.issue(s.loc, ReturnMismatch { actual, expect }) }
         actual != Ty::void()
       }
       StmtKind::Print(p) => {
         for (i, e) in p.iter().enumerate() {
           let ty = self.expr(e);
-          if ty != Ty::error() && ty != Ty::bool() && ty != Ty::int() && ty != Ty::string() {
-            self.issue(e.loc, BadPrintArg { loc: i as u32 + 1, ty })
+          if ty != Ty::bool() && ty != Ty::int() && ty != Ty::string() {
+            ty.error_or(|| self.issue(e.loc, BadPrintArg { loc: i as u32 + 1, ty }))
           }
         }
         false
@@ -110,29 +101,44 @@ impl<'a> TypePass<'a> {
     }
   }
 
-  // e.ty is set to the return value; e.result is set if e can be statically evaluated
+  // e.ty is set to the return value
   fn expr(&mut self, e: &'a Expr<'a>) -> Ty<'a> {
     use ExprKind::*;
     let ty = match &e.kind {
       VarSel(v) => self.var_sel(v, e.loc),
       IndexSel(i) => {
         let (arr, idx) = (self.expr(&i.arr), self.expr(&i.idx));
-        if idx != Ty::int() && idx != Ty::error() {
-          self.issue(e.loc, IndexNotInt)
-        }
+        if idx != Ty::int() { idx.error_or(|| self.issue(e.loc, IndexNotInt)) }
         match arr {
           Ty { arr, kind } if arr > 0 => Ty { arr: arr - 1, kind },
-          e if e == Ty::error() => Ty::error(),
-          _ => self.issue(i.arr.loc, IndexNotArray),
+          e => e.error_or(|| self.issue(i.arr.loc, IndexNotArray)),
         }
       }
-      IntLit(_) | ReadInt(_) => Ty::int(),
-      BoolLit(_) => Ty::bool(),
-      StringLit(_) | ReadLine(_) => Ty::string(),
-      NullLit(_) => Ty::null(),
+      IntLit(_) | ReadInt(_) => Ty::int(), BoolLit(_) => Ty::bool(), StringLit(_) | ReadLine(_) => Ty::string(), NullLit(_) => Ty::null(),
       Call(c) => self.call(c, e.loc),
-      Unary(u) => self.unary(u, e.loc),
-      Binary(b) => self.binary(b, e.loc),
+      Unary(u) => {
+        let r = self.expr(&u.r);
+        let (ty, op) = match u.op { UnOp::Neg => (Ty::int(), "-"), UnOp::Not => (Ty::bool(), "!"), };
+        if r != ty { r.error_or(|| self.issue(e.loc, IncompatibleUnary { op, r })) }
+        ty
+      }
+      Binary(b) => {
+        use BinOp::*;
+        let (l, r) = (self.expr(&b.l), self.expr(&b.r));
+        if l == Ty::error() || r == Ty::error() {
+          // not using wildcard match, so that if we add new operators in the future, compiler can tell us
+          match b.op { Add | Sub | Mul | Div | Mod => Ty::int(), And | Or | Eq | Ne | Lt | Le | Gt | Ge => Ty::bool() }
+        } else {
+          let (ret, ok) = match b.op {
+            Add | Sub | Mul | Div | Mod => (Ty::int(), l == Ty::int() && r == Ty::int()),
+            Lt | Le | Gt | Ge => (Ty::bool(), l == Ty::int() && r == Ty::int()),
+            Eq | Ne => (Ty::bool(), l.assignable_to(r) || r.assignable_to(l)),
+            And | Or => (Ty::bool(), l == Ty::bool() && r == Ty::bool())
+          };
+          if !ok { self.issue(e.loc, IncompatibleBinary { l, op: b.op.to_op_str(), r }) }
+          ret
+        }
+      }
       This(_) => {
         if self.cur_func.unwrap().static_ { self.issue(e.loc, ThisInStatic) }
         Ty::mk_obj(self.cur_class.unwrap())
@@ -143,16 +149,12 @@ impl<'a> TypePass<'a> {
       } else { self.issue(e.loc, NoSuchClass(n.name)) },
       NewArray(n) => {
         let len = self.expr(&n.len);
-        if len != Ty::int() && len != Ty::error() {
-          self.issue(n.len.loc, NewArrayNotInt)
-        }
+        if len != Ty::int() { len.error_or(|| self.issue(n.len.loc, NewArrayNotInt)) }
         self.ty(&n.elem, true)
       }
       ClassTest(c) => {
         let src = self.expr(&c.expr);
-        if src != Ty::error() && !src.is_object() {
-          self.issue(e.loc, NotObject { owner: src })
-        }
+        if !src.is_object() { src.error_or(|| self.issue(e.loc, NotObject(src))) }
         if let Some(cl) = self.scopes.lookup_class(c.name) {
           c.class.set(Some(cl));
           Ty::bool()
@@ -160,9 +162,7 @@ impl<'a> TypePass<'a> {
       }
       ClassCast(c) => {
         let src = self.expr(&c.expr);
-        if src != Ty::error() && !src.is_object() {
-          self.issue(e.loc, NotObject { owner: src })
-        }
+        if !src.is_object() { src.error_or(|| self.issue(e.loc, NotObject(src))) }
         if let Some(cl) = self.scopes.lookup_class(c.name) {
           c.class.set(Some(cl));
           Ty::mk_obj(cl)
@@ -173,42 +173,8 @@ impl<'a> TypePass<'a> {
     ty
   }
 
-  fn binary(&mut self, b: &'a Binary<'a>, loc: Loc) -> Ty<'a> {
-    use BinOp::*;
-    let (l, r) = (self.expr(&b.l), self.expr(&b.r));
-    if l == Ty::error() || r == Ty::error() {
-      match b.op {
-        Add | Sub | Mul | Div | Mod => Ty::int(),
-        And | Or | Eq | Ne | Lt | Le | Gt | Ge => Ty::bool(),
-      }
-    } else {
-      let (ret, ok) = match b.op {
-        Add | Sub | Mul | Div | Mod => (Ty::int(), l == Ty::int() && r == Ty::int()),
-        Lt | Le | Gt | Ge => (Ty::bool(), l == Ty::int() && r == Ty::int()),
-        Eq | Ne => (Ty::bool(), l.assignable_to(r) || r.assignable_to(l)),
-        And | Or => (Ty::bool(), l == Ty::bool() && r == Ty::bool())
-      };
-      if !ok { self.issue(loc, IncompatibleBinary { l, op: b.op.to_op_str(), r }) }
-      ret
-    }
-  }
-
-  fn unary(&mut self, u: &'a Unary<'a>, loc: Loc) -> Ty<'a> {
-    let r = self.expr(&u.r);
-    match u.op {
-      UnOp::Neg => {
-        if r != Ty::int() && r != Ty::error() { self.issue(loc, IncompatibleUnary { op: "-", r }) }
-        Ty::int()
-      }
-      UnOp::Not => {
-        if r != Ty::bool() && r != Ty::error() { self.issue(loc, IncompatibleUnary { op: "!", r }) }
-        Ty::bool()
-      }
-    }
-  }
-
   fn var_sel(&mut self, v: &'a VarSel<'a>, loc: Loc) -> Ty<'a> {
-    // (no owner)not_found_var / ClassName<ns> / (no owner)method => UndeclaredVar
+    // (no owner)not_found_var / ClassName(no field) / (no owner)method => UndeclaredVar
     // object.not_found_var => NoSuchField
     // (no owner)field_var && cur function is static => RefInStatic
     // <not object>.a (e.g.: Class.a, 1.a) / object.method => BadFieldAccess
@@ -232,7 +198,7 @@ impl<'a> TypePass<'a> {
             _ => self.issue(loc, BadFieldAccess { name: v.name, owner }),
           }
         } else { self.issue(loc, NoSuchField { name: v.name, owner }) },
-        e => if e == Ty::error() { Ty::error() } else { self.issue(loc, BadFieldAccess { name: v.name, owner }) }
+        e => e.error_or(|| self.issue(loc, BadFieldAccess { name: v.name, owner })),
       }
     } else {
       // if this stmt is in an VarDef, it cannot access the variable that is being declared
@@ -300,7 +266,7 @@ impl<'a> TypePass<'a> {
 impl<'a> TypePass<'a> {
   fn check_bool(&mut self, e: &'a Expr<'a>) {
     let ty = self.expr(e);
-    if ty != Ty::bool() && ty != Ty::error() { self.issue(e.loc, TestNotBool) }
+    if ty != Ty::bool() { ty.error_or(|| self.issue(e.loc, TestNotBool)) }
   }
 
   fn check_arg_param(&mut self, arg: &'a [Expr<'a>], ret_param: &[Ty<'a>], name: &'a str, loc: Loc) -> Ty<'a> {
