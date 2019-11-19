@@ -1,5 +1,5 @@
-use crate::bb::{FuncBB, NextKind, checked_simplify};
-use tac::{TacKind, Operand};
+use crate::bb::{FuncBB, NextKind, simplify};
+use tac::{Tac, Operand};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Value { Unk, Const(i32), Nac }
@@ -12,11 +12,11 @@ fn meet(x: Value, y: Value) -> Value {
   }
 }
 
-fn transfer(kind: TacKind, env: &mut [Value]) {
-  use TacKind::*;
+fn transfer(tac: Tac, env: &mut [Value]) {
+  use Tac::*;
   use Operand::*;
   use Value::{Const as C, Nac, Unk};
-  match kind {
+  match tac {
     Bin { op, dst, lr } => {
       let lr = match lr {
         [Const(l), Const(r)] => (C(l), C(r)),
@@ -40,13 +40,13 @@ fn transfer(kind: TacKind, env: &mut [Value]) {
     Load { dst, .. } => env[dst as usize] = Nac,
     // actually LoadStr and LoadVTbl won't give `dst` a Unk
     // but as long as the implementation is correct, `dst` can never be used in calculation, so giving them Unk is okay
-    LoadStr { dst, .. } | LoadVTbl { dst, .. } => env[dst as usize] = Unk,
+    LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => env[dst as usize] = Unk,
     Param { .. } | Ret { .. } | Jmp { .. } | Label { .. } | Jif { .. } | Store { .. } => {}
   }
 }
 
 pub fn work(f: &mut FuncBB) {
-  let (n, each) = (f.bb.len(), f.max_reg as usize);
+  let (n, each) = (f.bb.len(), f.reg_num as usize);
   let mut flow = vec![Value::Unk; n * each];
   for i in 0..f.param_num as usize {
     flow[i] = Value::Nac; // flow[i] is in the entry bb, and setting them is enough
@@ -63,7 +63,7 @@ pub fn work(f: &mut FuncBB) {
     }
     for (idx, b) in f.bb.iter().enumerate() {
       let env = &mut flow[idx * each..(idx + 1) * each];
-      for t in b.iter() { transfer(t.payload.borrow().kind, env); }
+      for t in b.iter() { transfer(t.tac.get(), env); }
     }
     if flow != tmp { tmp.clone_from_slice(&flow); } else { break; }
   }
@@ -71,13 +71,14 @@ pub fn work(f: &mut FuncBB) {
   for (idx, b) in f.bb.iter_mut().enumerate() {
     let env = &mut flow[idx * each..(idx + 1) * each];
     for t in b.iter() {
-      let mut payload = t.payload.borrow_mut();
-      for r in payload.kind.rw_mut().0 {
+      let mut tac = t.tac.get();
+      for r in tac.rw_mut().0 {
         if let Operand::Reg(r1) = *r {
           if let Value::Const(r1) = env[r1 as usize] { *r = Operand::Const(r1); }
         }
       }
-      transfer(payload.kind, env);
+      transfer(t.tac.get(), env); // old value
+      t.tac.set(tac);
     }
     match &mut b.next {
       NextKind::Ret(Some(r)) => if let Operand::Reg(r1) = *r {
@@ -90,7 +91,5 @@ pub fn work(f: &mut FuncBB) {
       _ => {}
     }
   }
-  if flow_changed {
-    f.bb = checked_simplify(std::mem::replace(&mut f.bb, Vec::new()), None).unwrap();
-  }
+  if flow_changed { f.bb = simplify(std::mem::replace(&mut f.bb, Vec::new())); }
 }

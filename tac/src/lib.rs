@@ -3,7 +3,7 @@ pub mod iter;
 pub use iter::TacIter;
 
 use common::{BinOp, UnOp, IndexSet};
-use std::{fmt, cell::{Cell, RefCell}};
+use std::{cell::Cell, fmt::{self, Debug}};
 use typed_arena::Arena;
 
 #[derive(Default)]
@@ -23,56 +23,44 @@ pub struct VTbl<'a> {
 
 pub struct TacFunc<'a> {
   pub param_num: u32,
-  pub max_reg: u32,
-  // check validity of this function, whether it returns without returning a value
-  pub has_ret: bool,
-  pub tac_len: u32,
-  // though normally we use first and last separately, if we write it as `first: Option<...>, last: Option<...>`
-  // we will lose the information that they can only be both Some or both None
-  pub first_last: Option<(&'a Tac<'a>, &'a Tac<'a>)>,
-  pub alloc: &'a Arena<Tac<'a>>,
-  pub name: FuncNameKind<'a>,
+  pub reg_num: u32,
+  // we don't store the number of tac here, so we can't use TacIter
+  // TacIter has more functions than we need to iterate over a function, but such functions are unnecessary
+  pub first: Option<&'a TacNode<'a>>,
+  pub last: Option<&'a TacNode<'a>>,
+  pub alloc: &'a Arena<TacNode<'a>>,
+  pub name: String,
 }
 
 impl<'a> TacFunc<'a> {
-  pub fn empty(alloc: &'a Arena<Tac<'a>>, name: FuncNameKind<'a>, param_num: u32, has_ret: bool) -> TacFunc<'a> {
-    TacFunc { param_num, max_reg: 0, has_ret, tac_len: 0, first_last: None, alloc, name }
+  pub fn empty(alloc: &'a Arena<TacNode<'a>>, name: String, param_num: u32) -> TacFunc<'a> {
+    TacFunc { param_num, reg_num: 0, first: None, last: None, alloc, name }
   }
 
-  pub fn push(&mut self, t: TacKind) -> &mut Self {
-    let tac = self.alloc.alloc(Tac { payload: TacPayload { kind: t }.into(), prev: None.into(), next: None.into() });
-    self.tac_len += 1;
-    match &mut self.first_last {
-      None => self.first_last = Some((tac, tac)),
-      Some((_, last)) => {
-        tac.prev.set(Some(last));
-        last.next.set(Some(tac));
-        *last = tac;
-      }
+  pub fn push(&mut self, t: Tac) -> &mut Self {
+    let tac = self.alloc.alloc(TacNode { tac: t.into(), prev: None.into(), next: None.into() });
+    if let Some(last) = &mut self.last {
+      tac.prev.set(Some(last));
+      last.next.set(Some(tac));
+      *last = tac;
+    } else {
+      self.first = Some(tac);
+      self.last = Some(tac);
     }
     self
   }
-
-  pub fn iter(&self) -> TacIter<'a> {
-    TacIter::new(self.first_last.map(|(f, _)| f), self.first_last.map(|(_, l)| l), self.tac_len as usize)
-  }
 }
 
-pub struct Tac<'a> {
-  pub payload: RefCell<TacPayload>,
-  pub prev: Cell<Option<&'a Tac<'a>>>,
-  pub next: Cell<Option<&'a Tac<'a>>>,
+pub struct TacNode<'a> {
+  pub tac: Cell<Tac>,
+  pub prev: Cell<Option<&'a TacNode<'a>>>,
+  pub next: Cell<Option<&'a TacNode<'a>>>,
 }
 
-// for compatibility, use a wrapper struct here instead of just using TacKind
-pub struct TacPayload {
-  pub kind: TacKind,
-}
-
-// unless specially noted, all u32 are register numbers
-// use array to help function `rw(_mut)` return a slice
+// `u32` can either mean register number or label id, its meaning is easy to distinguish according to the context
+// use array to allow function `rw(_mut)` return a slice
 #[derive(Copy, Clone)]
-pub enum TacKind {
+pub enum Tac {
   Bin { op: BinOp, dst: u32, lr: [Operand; 2] },
   Un { op: UnOp, dst: u32, r: [Operand; 1] },
   Assign { dst: u32, src: [Operand; 1] },
@@ -83,7 +71,7 @@ pub enum TacKind {
   Ret { src: Option<[Operand; 1]> },
   // label in Jmp & Je & Jne & Label
   Jmp { label: u32 },
-  // Jif stands for Jz and Jnz, determined by z
+  // Jif stands for Jz and Jnz, determined by `z`
   Jif { label: u32, z: bool, cond: [Operand; 1] },
   Label { label: u32 },
   // `hint` can help common expression elimination since we don't have alias analysis yet
@@ -96,12 +84,14 @@ pub enum TacKind {
   LoadStr { dst: u32, s: u32 },
   // v: the index in TacProgram::vtbl
   LoadVTbl { dst: u32, v: u32 },
+  // v: the index in TacProgram::func
+  LoadFunc { dst: u32, f: u32 },
 }
 
-impl TacKind {
+impl Tac {
   // r can be Operand, but w can only be reg, and there is at most 1 w
   pub fn rw(&self) -> (&[Operand], Option<u32>) {
-    use TacKind::*;
+    use Tac::*;
     match self {
       Bin { dst, lr, .. } => (lr, Some(*dst)),
       Un { dst, r, .. } | Assign { dst, src: r } | Load { dst, base: r, .. } => (r, Some(*dst)),
@@ -111,14 +101,14 @@ impl TacKind {
       Jmp { .. } | Label { .. } => (&[], None),
       Jif { cond, .. } => (cond, None),
       Store { src_base, .. } => (src_base, None),
-      LoadInt { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } => (&[], Some(*dst)),
+      LoadInt { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => (&[], Some(*dst)),
     }
   }
 
   // basically copied from `rw`, there is no better way in rust to write two functions, one is &self -> &result, another is &mut self -> &mut result
   // for example, the implementation of Iter and IterMut in many std collections are almost duplicate codes
   pub fn rw_mut(&mut self) -> (&mut [Operand], Option<&mut u32>) {
-    use TacKind::*;
+    use Tac::*;
     match self {
       Bin { dst, lr, .. } => (lr, Some(dst)),
       Un { dst, r, .. } | Assign { dst, src: r } | Load { dst, base: r, .. } => (r, Some(dst)),
@@ -129,7 +119,7 @@ impl TacKind {
       Jmp { .. } | Label { .. } => (&mut [], None),
       Jif { cond, .. } => (cond, None),
       Store { src_base, .. } => (src_base, None),
-      LoadInt { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } => (&mut [], Some(dst)),
+      LoadInt { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => (&mut [], Some(dst)),
     }
   }
 }
@@ -145,6 +135,12 @@ pub enum CallKind {
 #[derive(Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Operand { Reg(u32), Const(i32) }
 
+impl Debug for Operand {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self { Operand::Reg(r) => write!(f, "_T{}", r), Operand::Const(c) => write!(f, "{}", c) }
+  }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug, strum_macros::IntoStaticStr)]
 pub enum Intrinsic { _Alloc, _ReadLine, _ReadInt, _StringEqual, _PrintInt, _PrintString, _PrintBool, _Halt }
 
@@ -153,26 +149,7 @@ impl Intrinsic {
 
   pub fn has_ret(self) -> bool {
     use Intrinsic::*;
-    match self {
-      _Alloc | _ReadLine | _ReadInt | _StringEqual => true, _PrintInt | _PrintString | _PrintBool | _Halt => false
-    }
-  }
-}
-
-#[derive(Copy, Clone)]
-pub enum FuncNameKind<'a> {
-  Main,
-  New { class: &'a str },
-  Member { class: &'a str, func: &'a str },
-}
-
-impl fmt::Debug for FuncNameKind<'_> {
-  fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-    match self {
-      FuncNameKind::Main => write!(f, "main"),
-      FuncNameKind::New { class } => write!(f, "_{}_New", class),
-      FuncNameKind::Member { class, func } => write!(f, "_{}.{}", class, func),
-    }
+    match self { _Alloc | _ReadLine | _ReadInt | _StringEqual => true, _PrintInt | _PrintString | _PrintBool | _Halt => false }
   }
 }
 

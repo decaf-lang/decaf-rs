@@ -1,6 +1,6 @@
 use crate::{bb::{FuncBB, BB}, flow::{FlowElem, Flow, And}};
 use common::{BinOp, UnOp, HashMap, HashSet, Ref};
-use tac::{TacKind, Operand, MemHint, CallKind, Tac, TacIter, TacPayload};
+use tac::{Tac, Operand, MemHint, CallKind, TacNode, TacIter};
 use bitset::traits::*;
 
 pub fn work(f: &mut FuncBB) { WorkCtx::new(f).work(f); }
@@ -13,11 +13,11 @@ enum TacRhs {
 }
 
 impl TacRhs {
-  fn from_tac(kind: TacKind) -> Option<TacRhs> {
-    match kind {
-      TacKind::Bin { op, lr, .. } => Some(TacRhs::Bin(op, lr)),
-      TacKind::Un { op, r, .. } => Some(TacRhs::Un(op, r)),
-      TacKind::Load { base, off, .. } => { Some(TacRhs::Load(base, off)) }
+  fn from_tac(tac: Tac) -> Option<TacRhs> {
+    match tac {
+      Tac::Bin { op, lr, .. } => Some(TacRhs::Bin(op, lr)),
+      Tac::Un { op, r, .. } => Some(TacRhs::Un(op, r)),
+      Tac::Load { base, off, .. } => { Some(TacRhs::Load(base, off)) }
       _ => None
     }
   }
@@ -32,14 +32,14 @@ impl TacRhs {
 }
 
 // return whether this tac kill (obj, arr)
-fn mem_kill(kind: TacKind) -> (bool, bool) {
+fn mem_kill(kind: Tac) -> (bool, bool) {
   match kind {
-    TacKind::Store { hint, .. } => match hint {
+    Tac::Store { hint, .. } => match hint {
       MemHint::Immutable => (false, false),
       MemHint::Obj => (true, false),
       MemHint::Arr => (false, true),
     }
-    TacKind::Call { kind, .. } => match kind {
+    Tac::Call { kind, .. } => match kind {
       CallKind::Virtual(_, hint) | CallKind::Static(_, hint) => (hint.arg_obj, hint.arg_arr),
       _ => (false, false)
     }
@@ -53,7 +53,7 @@ struct WorkCtx<'a> {
   write2id: HashMap<u32, Box<[u32]>>,
   rhs2id: HashMap<TacRhs, u32>,
   // tac2id: tac to its TacRhs's id
-  tac2id: HashMap<Ref<'a, Tac<'a>>, u32>,
+  tac2id: HashMap<Ref<'a, TacNode<'a>>, u32>,
   // obj/arr: these TacRhs are Load, and they load from obj/arr
   obj: Box<[u32]>,
   arr: Box<[u32]>,
@@ -67,13 +67,12 @@ impl<'a> WorkCtx<'a> {
     let (mut obj, mut arr) = (HashSet::new(), HashSet::new());
     for b in &f.bb {
       for t in b.iter() {
-        let payload = t.payload.borrow();
-        let payload = &*payload;
-        if let Some(rhs) = TacRhs::from_tac(payload.kind) {
+        let tac = t.tac.get();
+        if let Some(rhs) = TacRhs::from_tac(tac) {
           let id = rhs2id.len() as u32;
           let id = *rhs2id.entry(rhs).or_insert(id);
           tac2id.insert(Ref(t), id);
-          if let TacKind::Load { hint, .. } = payload.kind {
+          if let Tac::Load { hint, .. } = tac {
             match hint {
               MemHint::Immutable => {}
               MemHint::Obj => { obj.insert(id); }
@@ -114,14 +113,13 @@ impl<'a> WorkCtx<'a> {
 
   fn compute_gen_kill(&self, b: &BB, gen: &mut [u32], kill: &mut [u32]) {
     for t in b.iter() {
-      let payload = t.payload.borrow();
-      let payload = &*payload;
-      if let Some(rhs) = TacRhs::from_tac(payload.kind).map(|rhs| self.rhs2id[&rhs]) { gen.bsset(rhs) }
-      if let Some(w) = payload.kind.rw().1.and_then(|w| self.write2id.get(&w)) {
+      let tac = t.tac.get();
+      if let Some(rhs) = TacRhs::from_tac(tac).map(|rhs| self.rhs2id[&rhs]) { gen.bsset(rhs) }
+      if let Some(w) = tac.rw().1.and_then(|w| self.write2id.get(&w)) {
         kill.bsor(w);
         gen.bsandn(w); // this has to be done after gen.bsset(rhs), because x = x + y doesn't gen x + y
       }
-      let (obj, arr) = mem_kill(payload.kind);
+      let (obj, arr) = mem_kill(tac);
       if obj {
         kill.bsor(&self.obj);
         gen.bsandn(&self.obj);
@@ -134,14 +132,15 @@ impl<'a> WorkCtx<'a> {
   }
 
   // all available expression with index = `rhs` be replaced by computing it to `new` and copy `new` to original dst
-  fn dfs(&mut self, idx: usize, f: &mut FuncBB<'a>, iter: impl IntoIterator<Item=&'a Tac<'a>>, rhs: u32, new: u32) {
+  fn dfs(&mut self, idx: usize, f: &mut FuncBB<'a>, iter: impl IntoIterator<Item=&'a TacNode<'a>>, rhs: u32, new: u32) {
     if self.vis[idx] { return; }
     self.vis[idx] = true;
     for t in iter {
       if self.tac2id.get(&Ref(t)) == Some(&rhs) {
-        let old = std::mem::replace(t.payload.borrow_mut().kind.rw_mut().1.expect("This tac with rhs must also have a lhs."), new);
-        let payload = TacPayload { kind: TacKind::Assign { dst: old, src: [Operand::Reg(new)] } }.into();
-        let copy = f.alloc.alloc(Tac { payload, prev: None.into(), next: None.into() });
+        let mut tac = t.tac.get();
+        let dst = std::mem::replace(tac.rw_mut().1.expect("This tac with rhs must also have a lhs."), new);
+        t.tac.set(tac); // the lhs of `tac` is changed to `new`
+        let copy = f.alloc.alloc(TacNode { tac: Tac::Assign { dst, src: [Operand::Reg(new)] }.into(), prev: None.into(), next: None.into() });
         f.bb[idx].insert_after(t, copy);
         return;
       }
@@ -154,23 +153,22 @@ impl<'a> WorkCtx<'a> {
 
   fn do_optimize(&mut self, idx: usize, f: &mut FuncBB<'a>, in_: &mut [u32]) {
     for (t_idx, t) in f.bb[idx].iter().enumerate() {
-      let mut payload = t.payload.borrow_mut();
-      let payload = &mut *payload;
-      let old_kind = payload.kind;
-      if let Some(rhs) = TacRhs::from_tac(payload.kind) {
+      let tac = t.tac.get();
+      if let Some(rhs) = TacRhs::from_tac(tac) {
         let rhs = self.rhs2id[&rhs];
         if in_.bsget(rhs) {
           let new = f.new_reg();
           for v in &mut self.vis { *v = false; }
+          // `prev` will iterate over all tac before `t` reversely
           let prev = TacIter::new(f.bb[idx].first, Some(t), t_idx + 1).rev().skip(1);
           self.dfs(idx, f, prev, rhs, new);
-          let w = payload.kind.rw().1.expect("The tac with rhs must also have a lhs.");
-          payload.kind = TacKind::Assign { dst: w, src: [Operand::Reg(new)] };
+          let dst = tac.rw().1.expect("The tac with rhs must also have a lhs.");
+          t.tac.set(Tac::Assign { dst, src: [Operand::Reg(new)] });
         }
       }
-      if let Some(rhs) = TacRhs::from_tac(old_kind).map(|rhs| self.rhs2id[&rhs]) { in_.bsset(rhs) }
-      if let Some(w) = old_kind.rw().1.and_then(|w| self.write2id.get(&w)) { in_.bsandn(w) }
-      let (obj, arr) = mem_kill(old_kind);
+      if let Some(rhs) = TacRhs::from_tac(tac).map(|rhs| self.rhs2id[&rhs]) { in_.bsset(rhs) }
+      if let Some(w) = tac.rw().1.and_then(|w| self.write2id.get(&w)) { in_.bsandn(w) }
+      let (obj, arr) = mem_kill(tac);
       if obj { in_.bsandn(&self.obj); }
       if arr { in_.bsandn(&self.arr); }
     }

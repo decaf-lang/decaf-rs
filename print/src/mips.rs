@@ -1,5 +1,5 @@
 use common::{IndentPrinter, IgnoreResult};
-use tac::{TacProgram, FuncNameKind};
+use tac::{TacProgram};
 use codegen::mips::AsmTemplate;
 use std::fmt::Write;
 
@@ -16,7 +16,7 @@ pub fn data(pr: &TacProgram, p: &mut IndentPrinter) {
       }
       write!(p, ".word _STRING{}", pr.str_pool.get_full(v.class).expect("tacgen should have put class name into `str_pool`").0).ignore();
       for &f in &v.func {
-        write!(p, ".word {:?}", pr.func[f as usize].name).ignore();
+        write!(p, ".word {}", pr.func[f as usize].name).ignore();
       }
     });
   }
@@ -29,10 +29,10 @@ pub fn data(pr: &TacProgram, p: &mut IndentPrinter) {
   writeln!(p).ignore();
 }
 
-pub fn func(f: &[AsmTemplate], name: FuncNameKind, p: &mut IndentPrinter) {
+pub fn func(f: &[AsmTemplate], name: &str, p: &mut IndentPrinter) {
   write!(p, ".text").ignore();
-  write!(p, ".globl {:?}", name).ignore();
-  write!(p, "{:?}:", name).ignore();
+  write!(p, ".globl {}", name).ignore();
+  write!(p, "{}:", name).ignore();
   p.indent(|p| for asm in f { write!(p, "{:?}", asm).ignore(); });
   writeln!(p).ignore();
 }

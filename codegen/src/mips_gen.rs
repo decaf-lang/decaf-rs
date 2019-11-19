@@ -1,15 +1,15 @@
 use crate::{graph_alloc::*, mips::{*, regs::*}, Reg, AllocMethod};
 use tacopt::{bb::{FuncBB, NextKind}, flow::{Flow, Or, FlowElem}};
-use tac::{TacKind, TacProgram, Operand, CallKind, FuncNameKind, Intrinsic};
+use tac::{Tac, TacProgram, Operand, CallKind, Intrinsic};
 use common::{HashSet, HashMap, BinOp};
 use bitset::traits::*;
 
 pub struct FuncGen<'a, 'b> {
   pub(crate) param_num: u32,
-  pub(crate) max_reg: u32,
-  // for functions that this function calls
-  pub(crate) max_param: u32,
-  pub(crate) name: FuncNameKind<'a>,
+  pub(crate) reg_num: u32,
+  // for functions that this function calls, not the parameter of this function (which is `param_num`)
+  pub(crate) ch_param_num: u32,
+  pub(crate) name: &'b str,
   pub(crate) program: &'b TacProgram<'a>,
   // we do need to insert in the SomeContainer<AsmTemplate>, but rust's LinkedList's api is so limited
   // and we do not need arbitrary insertion/deletion, so a Vec will be enough
@@ -30,7 +30,7 @@ impl AllocCtx for FuncGen<'_, '_> {
   fn initial(&self) -> (Vec<u32>, Vec<Node>) {
     // there are only ALLOC_N registers to allocate, but there are REG_N pre-colored nodes
     // (by definition, a machine register <=> a pre-colored node)
-    ((REG_N..self.max_reg + REG_N).collect(), (0..self.max_reg + REG_N).map(|r| if r < REG_N {
+    ((REG_N..self.reg_num + REG_N).collect(), (0..self.reg_num + REG_N).map(|r| if r < REG_N {
       Node::new(Reg::PreColored(r))
     } else {
       Node::new(Reg::Virtual(r))
@@ -45,8 +45,8 @@ impl AllocCtx for FuncGen<'_, '_> {
     for (off, b) in self.bb.iter().enumerate().map(|b| (b.0 * each, &(b.1).0)) {
       let live = &mut out[off..off + each];
       for t in b.iter().rev() {
-        if let AsmTemplate::Mv(w1, r1) = t {
-          let (w1, r1) = (Reg::id(w1), Reg::id(r1));
+        if let &AsmTemplate::Mv(w1, r1) = t {
+          let (w1, r1) = (w1.id(), r1.id());
           if Self::involved_in_alloc(w1) && Self::involved_in_alloc(r1) {
             live.bsdel(r1);
             allocator.nodes[w1 as usize].move_list.push((w1, r1));
@@ -55,15 +55,15 @@ impl AllocCtx for FuncGen<'_, '_> {
           }
         }
         t.rw(&mut r, &mut w);
-        for w in w.iter().map(Reg::id) {
+        for w in w.iter().cloned().map(Reg::id) {
           for l in live.bsones() {
             if Self::involved_in_alloc(w) && Self::involved_in_alloc(l) {
               allocator.add_edge(w, l);
             }
           }
         }
-        w.iter().map(Reg::id).for_each(|w| live.bsdel(w));
-        r.iter().map(Reg::id).for_each(|r| live.bsset(r));
+        w.iter().cloned().map(Reg::id).for_each(|w| live.bsdel(w));
+        r.iter().cloned().map(Reg::id).for_each(|r| live.bsset(r));
       }
     }
   }
@@ -120,10 +120,10 @@ impl AllocCtx for FuncGen<'_, '_> {
 }
 
 impl<'a: 'b, 'b> FuncGen<'a, 'b> {
-  pub fn work(f: &FuncBB<'a>, p: &'b TacProgram<'a>, m: AllocMethod) -> Vec<AsmTemplate> {
-    // max_reg is not inced by K, and new_reg() doesn't either, so all usage of virtual register id need to inc K
+  pub fn work(f: &'b FuncBB<'a>, p: &'b TacProgram<'a>, m: AllocMethod) -> Vec<AsmTemplate> {
+    // reg_num is not inced by K, and new_reg() doesn't either, so all usage of virtual register id need to inc K
     // including those using f's inst and those generated to meet calling convention
-    let mut fu = FuncGen { param_num: f.param_num, max_reg: f.max_reg, max_param: 0, name: f.name, program: p, bb: Vec::new(), spill2slot: HashMap::new() };
+    let mut fu = FuncGen { param_num: f.param_num, reg_num: f.reg_num, ch_param_num: 0, name: &f.name, program: p, bb: Vec::new(), spill2slot: HashMap::new() };
     fu.populate(f);
     match m { AllocMethod::Graph => Allocator::work(&mut fu), AllocMethod::Brute => fu.brute_alloc() }
     fu.fill_imm_tag();
@@ -140,11 +140,11 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
     for (idx, b1) in f.bb.iter().enumerate() {
       let mut b2 = Vec::new();
       if !(b1.prev.is_empty() || (b1.prev.len() == 1 && b1.prev[0] + 1 == idx as u32)) {
-        b2.push(AsmTemplate::Label(format!("{:?}_L{}:", self.name, idx + 1)));
+        b2.push(AsmTemplate::Label(format!("{}_L{}:", self.name, idx + 1)));
       }
       let mut arg_cnt = 0;
       for t in b1.iter() {
-        self.select_inst(t.payload.borrow().kind, &mut b2, &mut arg_cnt);
+        self.select_inst(t.tac.get(), &mut b2, &mut arg_cnt);
       }
       // generate ret/jmp/..., and return the `next` by the way
       let next = self.build_next(idx as u32, f.bb.len() as u32 + 1, b1.next, &mut b2);
@@ -165,7 +165,7 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
       }
     }
     // Tac::Ret should mv return value(if any) to v0 and jmp here
-    epi.push(Label(format!("{:?}_Ret:", self.name)));
+    epi.push(Label(format!("{}_Ret:", self.name)));
     for ces in CALLEE_SAVE {
       let tmp = self.new_reg();
       pro.push(Mv(vreg(tmp), Reg::PreColored(ces)));
@@ -182,20 +182,20 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
     r < Self::K /* an allocatable machine register */ || r >= REG_N /* an virtual register */
   }
 
-  fn new_reg(&mut self) -> u32 { (self.max_reg, self.max_reg += 1).0 }
+  fn new_reg(&mut self) -> u32 { (self.reg_num, self.reg_num += 1).0 }
 
   pub(crate) fn find_spill_slot(&mut self, vreg: u32) -> Imm {
     let vreg = vreg - REG_N;
     if vreg < self.param_num.max(ARG_N) { // function arguments already have places to spill
       Imm::Tag(vreg)
     } else {
-      let new_slot = (self.spill2slot.len() as i32 + self.max_param as i32) * WORD_SIZE;
+      let new_slot = (self.spill2slot.len() as i32 + self.ch_param_num as i32) * WORD_SIZE;
       Imm::Int(*self.spill2slot.entry(vreg).or_insert(new_slot))
     }
   }
 
   fn fill_imm_tag(&mut self) {
-    let self_stack = (self.spill2slot.len() as i32 + self.max_param as i32) * WORD_SIZE;
+    let self_stack = (self.spill2slot.len() as i32 + self.ch_param_num as i32) * WORD_SIZE;
     for (b, _) in &mut self.bb {
       for t in b {
         if let Some(imm) = t.imm_mut() {
@@ -238,7 +238,7 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
 impl FuncGen<'_, '_> {
   // the logic is almost the same as `aliveness.rs`
   pub fn analyze(&self) -> Flow<Or> {
-    let mut aliveness_flow = Flow::<Or>::new(self.bb.len(), (self.max_reg + REG_N) as usize);
+    let mut aliveness_flow = Flow::<Or>::new(self.bb.len(), (self.reg_num + REG_N) as usize);
     let each = aliveness_flow.each();
     let FlowElem { gen: use_, kill: def, .. } = aliveness_flow.split();
     for (idx, b) in self.bb.iter().enumerate() {
@@ -253,11 +253,11 @@ impl FuncGen<'_, '_> {
     let (mut r, mut w) = (Vec::new(), Vec::new());
     for t in b.iter().rev() {
       t.rw(&mut r, &mut w);
-      w.iter().map(Reg::id).for_each(|w| {
+      w.iter().cloned().map(Reg::id).for_each(|w| {
         def.bsset(w);
         use_.bsdel(w);
       });
-      r.iter().map(Reg::id).for_each(|r| {
+      r.iter().cloned().map(Reg::id).for_each(|r| {
         use_.bsset(r);
         def.bsdel(r);
       });
@@ -266,10 +266,10 @@ impl FuncGen<'_, '_> {
 }
 
 impl FuncGen<'_, '_> {
-  fn select_inst(&mut self, t: TacKind, b: &mut Vec<AsmTemplate>, arg_cnt: &mut u32) {
+  fn select_inst(&mut self, t: Tac, b: &mut Vec<AsmTemplate>, arg_cnt: &mut u32) {
     use AsmTemplate::*;
     match t {
-      TacKind::Bin { op, dst, lr } => {
+      Tac::Bin { op, dst, lr } => {
         match lr {
           [Operand::Const(l), Operand::Const(r)] => b.push(Li(vreg(dst), Imm::Int(op.eval(l, r)))),
           [Operand::Reg(l), Operand::Const(r)] => b.push(BinI(op, vreg(dst), vreg(l), Imm::Int(r))),
@@ -282,13 +282,13 @@ impl FuncGen<'_, '_> {
           [Operand::Reg(l), Operand::Reg(r)] => b.push(Bin(op, vreg(dst), vreg(l), vreg(r)))
         }
       }
-      TacKind::Un { op, dst, r } => match r[0] {
+      Tac::Un { op, dst, r } => match r[0] {
         Operand::Const(r) => b.push(Li(vreg(dst), Imm::Int(op.eval(r)))),
         // luckily(?) the name used in printing ast is just the mips asm name
         Operand::Reg(r) => b.push(Un(op, vreg(dst), vreg(r))),
       }
-      TacKind::Assign { dst, src } => self.build_mv(vreg(dst), src[0], b),
-      TacKind::Param { src } => {
+      Tac::Assign { dst, src } => self.build_mv(vreg(dst), src[0], b),
+      Tac::Param { src } => {
         let src = self.build_operand(src[0], b);
         match ARG.nth(*arg_cnt as usize) {
           Some(a) => b.push(Mv(Reg::PreColored(a), src)),
@@ -296,7 +296,7 @@ impl FuncGen<'_, '_> {
         }
         *arg_cnt += 1;
       }
-      TacKind::Call { dst, kind } => {
+      Tac::Call { dst, kind } => {
         let called = match kind {
           CallKind::Virtual(r, _) => {
             let r = self.build_operand(r[0], b);
@@ -304,31 +304,32 @@ impl FuncGen<'_, '_> {
             true
           }
           CallKind::Static(f, _) => {
-            b.push(Jal(format!("{:?}", self.program.func[f as usize].name)));
+            b.push(Jal(self.program.func[f as usize].name.clone()));
             true
           }
           CallKind::Intrinsic(i) => self.build_intrinsic(i, b),
         };
         if called {
-          // once it is really a function call, max_param should grows from 4
+          // once it is really a function call, ch_param_num should grows from 4
           // because calling convention says the first 4 argument should have their slots on the stack
-          self.max_param = self.max_param.max(*arg_cnt).max(4);
+          self.ch_param_num = self.ch_param_num.max(*arg_cnt).max(4);
         }
         *arg_cnt = 0;
         if let Some(dst) = dst { b.push(Mv(vreg(dst), mreg(V0))); }
       }
-      TacKind::Load { dst, base, off, .. } => {
+      Tac::Load { dst, base, off, .. } => {
         let base = self.build_operand(base[0], b);
         b.push(Lw(vreg(dst), base, Imm::Int(off)));
       }
-      TacKind::Store { src_base, off, .. } => {
+      Tac::Store { src_base, off, .. } => {
         let (src, base) = (self.build_operand(src_base[0], b), self.build_operand(src_base[1], b));
         b.push(Sw(src, base, Imm::Int(off)));
       }
-      TacKind::LoadInt { dst, i } => b.push(AsmTemplate::Li(vreg(dst), Imm::Int(i))),
-      TacKind::LoadStr { dst, s } => b.push(AsmTemplate::La(vreg(dst), format!("_STRING{}", s))),
-      TacKind::LoadVTbl { dst, v } => b.push(AsmTemplate::La(vreg(dst), format!("_{}", self.program.vtbl[v as usize].class))),
-      TacKind::Label { .. } | TacKind::Ret { .. } | TacKind::Jmp { .. } | TacKind::Jif { .. } => unreachable!("Shouldn't meet Ret/Jmp/Jif/Label in a tac bb."),
+      Tac::LoadInt { dst, i } => b.push(AsmTemplate::Li(vreg(dst), Imm::Int(i))),
+      Tac::LoadStr { dst, s } => b.push(AsmTemplate::La(vreg(dst), format!("_STRING{}", s))),
+      Tac::LoadVTbl { dst, v } => b.push(AsmTemplate::La(vreg(dst), format!("_{}", self.program.vtbl[v as usize].class))),
+      Tac::LoadFunc { dst, f } => b.push(AsmTemplate::La(vreg(dst), self.program.func[f as usize].name.clone())),
+      Tac::Label { .. } | Tac::Ret { .. } | Tac::Jmp { .. } | Tac::Jif { .. } => unreachable!("Shouldn't meet Ret/Jmp/Jif/Label in a tac bb."),
     }
   }
 
@@ -378,18 +379,18 @@ impl FuncGen<'_, '_> {
           self.build_mv(mreg(V0), src, b);
         }
         if idx + 2 != epilogue { // + 2, 1 for "prologue takes index 0", 1 for next bb should inc by 1 naturally
-          b.push(AsmTemplate::J(format!("{:?}_Ret", self.name)));
+          b.push(AsmTemplate::J(format!("{}_Ret", self.name)));
         }
         [Some(epilogue), None]
       }
       NextKind::Jmp(jump) => {
         if idx + 1 != jump {
-          b.push(AsmTemplate::J(format!("{:?}_L{}", self.name, jump + 1)));
+          b.push(AsmTemplate::J(format!("{}_L{}", self.name, jump + 1)));
         }
         [Some(jump + 1), None]
       }
       NextKind::Jif { cond, z, fail, jump } => {
-        b.push(AsmTemplate::B(format!("{:?}_L{}", self.name, jump + 1), vreg(cond), z));
+        b.push(AsmTemplate::B(format!("{}_L{}", self.name, jump + 1), vreg(cond), z));
         [Some(fail + 1), Some(jump + 1)]
       }
       NextKind::Halt => {

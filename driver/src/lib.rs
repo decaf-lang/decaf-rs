@@ -7,7 +7,7 @@ use syntax::{ASTAlloc, Ty, parser, parser_ll};
 use typeck::TypeCkAlloc;
 use tacopt::bb::FuncBB;
 use codegen::mips_gen::FuncGen;
-use tac::Tac;
+use tac::TacNode;
 use typed_arena::Arena;
 
 pub use test_util::*;
@@ -28,7 +28,7 @@ pub struct CompileCfg {
 pub struct Alloc<'a> {
   ast: ASTAlloc<'a>,
   typeck: TypeCkAlloc<'a>,
-  tac: Arena<Tac<'a>>,
+  tac: Arena<TacNode<'a>>,
 }
 
 // it is recommended to use this function to debug your compiler
@@ -58,12 +58,11 @@ pub fn compile<'a>(code: &'a str, alloc: &'a Alloc<'a>, cfg: CompileCfg) -> Resu
   }
   let mut new_funcs = Vec::new();
   for f in &tp.func {
-    // it is okay to unwrap because in typeck we guarantee "f's return type is not void and control flow can reaches end of function" won't happen
-    let mut fu = FuncBB::new(f).unwrap();
+    let mut fu = FuncBB::new(f);
     fu.optimizen(10);
     if cfg.stage == Stage::Asm {
       let asm = FuncGen::work(&fu, &tp, codegen::AllocMethod::Graph);
-      print::mips::func(&asm, f.name, &mut p);
+      print::mips::func(&asm, &f.name, &mut p);
     } else { // cfg.stage == Stage::TacOpt
       new_funcs.push(fu.to_tac_func());
     }

@@ -1,31 +1,32 @@
 mod info;
 
 use syntax::{ast::*, ty::*, ScopeOwner};
-use ::tac::{*, self, TacKind, TacKind::*, Operand::*, Intrinsic::*};
+use ::tac::{self, *, Tac::{self, *}, Operand::*, Intrinsic::*};
 use common::{Ref, MAIN_METHOD, BinOp::*, UnOp::*, IndexSet, IndexMap, HashMap};
 use typed_arena::Arena;
 use crate::info::*;
 
 #[derive(Default)]
 struct TacGen<'a> {
-  reg_cnt: u32,
+  reg_num: u32,
   label_cnt: u32,
   loop_stk: Vec<u32>,
   // Id & Index will behave differently when they are the lhs of an assignment
   // cur_assign contains the current assign rhs operand, or None if the current handling expr doesn't involve in assign
   cur_assign: Option<Operand>,
   str_pool: IndexSet<&'a str>,
+  // `*_info` just works like extra fields to those structs, their specific meaning can be found at `struct *Info`
   var_info: HashMap<Ref<'a, VarDef<'a>>, VarInfo>,
   func_info: HashMap<Ref<'a, FuncDef<'a>>, FuncInfo>,
   class_info: HashMap<Ref<'a, ClassDef<'a>>, ClassInfo<'a>>,
 }
 
-pub fn work<'a>(p: &'a Program<'a>, alloc: &'a Arena<Tac<'a>>) -> TacProgram<'a> {
+pub fn work<'a>(p: &'a Program<'a>, alloc: &'a Arena<TacNode<'a>>) -> TacProgram<'a> {
   TacGen::default().program(p, alloc)
 }
 
 impl<'a> TacGen<'a> {
-  fn program(mut self, p: &Program<'a>, alloc: &'a Arena<Tac<'a>>) -> TacProgram<'a> {
+  fn program(mut self, p: &Program<'a>, alloc: &'a Arena<TacNode<'a>>) -> TacProgram<'a> {
     let mut tp = TacProgram::default();
     for (idx, &c) in p.class.iter().enumerate() {
       self.define_str(c.name);
@@ -34,7 +35,7 @@ impl<'a> TacGen<'a> {
       tp.func.push(self.build_new(c, alloc));
     }
     {
-      let mut idx = tp.func.len() as u32; // their are already some `_Xxx_New` functions in tp.func
+      let mut idx = tp.func.len() as u32; // their are already some `_Xxx._new` functions in tp.func, so can't start from 0
       for &c in &p.class {
         for &f in &c.field {
           if let FieldDef::FuncDef(f) = f {
@@ -52,19 +53,14 @@ impl<'a> TacGen<'a> {
             self.var_info.insert(Ref(p), VarInfo { off: idx as u32 + this });
           }
           // these regs are occupied by parameters
-          self.reg_cnt = fu.param.len() as u32 + this;
+          self.reg_num = fu.param.len() as u32 + this;
           self.label_cnt = 0;
-          let mut f = TacFunc::empty(alloc, if Ref(c) == Ref(p.main.get().unwrap()) && fu.name == MAIN_METHOD {
-            FuncNameKind::Main
-          } else {
-            FuncNameKind::Member { class: c.name, func: fu.name }
-          }, self.reg_cnt, fu.ret_ty() != Ty::void());
+          let name = if Ref(c) == Ref(p.main.get().unwrap()) && fu.name == MAIN_METHOD { MAIN_METHOD.into() } else { format!("_{}.{}", c.name, fu.name) };
+          let mut f = TacFunc::empty(alloc, name, self.reg_num);
           self.block(&fu.body, &mut f);
-          f.max_reg = self.reg_cnt;
+          f.reg_num = self.reg_num;
           // add an return at the end of return-void function
-          if fu.ret_ty() == Ty::void() {
-            f.push(TacKind::Ret { src: None });
-          }
+          if fu.ret_ty() == Ty::void() { f.push(Tac::Ret { src: None }); }
           tp.func.push(f);
         }
       }
@@ -95,7 +91,7 @@ impl<'a> TacGen<'a> {
         let reg = self.reg();
         self.var_info.insert(Ref(v), VarInfo { off: reg });
         let init = v.init.as_ref().map(|(_, e)| self.expr(e, f)).unwrap_or(Const(0));
-        f.push(TacKind::Assign { dst: reg, src: [init] });
+        f.push(Tac::Assign { dst: reg, src: [init] });
       }
       ExprEval(e) => { self.expr(e, f); }
       Skip(_) => {}
@@ -156,11 +152,9 @@ impl<'a> TacGen<'a> {
         f.push(Label { label: after_body });
         self.loop_stk.pop();
       }
-      Return(r) => if let Some(e) = r {
-        let ret = self.expr(e, f);
-        f.push(Ret { src: Some([ret]) });
-      } else {
-        f.push(Ret { src: None });
+      Return(r) => {
+        let src = r.as_ref().map(|e| [self.expr(e, f)]);
+        f.push(Ret { src });
       }
       Print(p) => for e in p {
         let reg = self.expr(e, f);
@@ -181,52 +175,55 @@ impl<'a> TacGen<'a> {
     use ExprKind::*;
     let assign = self.cur_assign.take();
     match &e.kind {
-      VarSel(v) => Reg({
+      VarSel(v) => {
         let var = v.var.get().unwrap();
-        let off = self.var_info[&Ref(var)].off;
+        let off = self.var_info[&Ref(var)].off; // may be register id or offset in class
         match var.owner.get().unwrap() {
-          ScopeOwner::Local(_) | ScopeOwner::Param(_) => if let Some(src) = assign { // off is register
-            // don't care this return, the below 0 is the same
-            (f.push(TacKind::Assign { dst: off, src: [src] }), 0).1
-          } else { off }
-          ScopeOwner::Class(_) => { // off is offset
+          ScopeOwner::Local(_) | ScopeOwner::Param(_) => if let Some(src) = assign { // `off` is register
+            f.push(Tac::Assign { dst: off, src: [src] });
+            // the return value won't be used, so just return a meaningless Reg(0), the below Reg(0)s are the same
+            Reg(0)
+          } else { Reg(off) }
+          ScopeOwner::Class(_) => { // `off` is offset
             // `this` is at argument 0
             let owner = v.owner.as_ref().map(|o| self.expr(o, f)).unwrap_or(Reg(0));
-            match assign {
-              Some(src) => (f.push(Store { src_base: [src, owner], off: off as i32 * INT_SIZE, hint: MemHint::Obj }), 0).1,
-              None => {
-                let dst = self.reg();
-                (f.push(Load { dst, base: [owner], off: off as i32 * INT_SIZE, hint: MemHint::Obj }), dst).1
-              }
+            if let Some(src) = assign {
+              f.push(Store { src_base: [src, owner], off: off as i32 * INT_SIZE, hint: MemHint::Obj });
+              Reg(0)
+            } else {
+              let dst = self.reg();
+              f.push(Load { dst, base: [owner], off: off as i32 * INT_SIZE, hint: MemHint::Obj });
+              Reg(dst)
             }
           }
           ScopeOwner::Global(_) => unreachable!("Impossible to declare a variable in global scope."),
         }
-      }),
-      IndexSel(i) => Reg({
+      }
+      IndexSel(i) => {
         let (arr, idx) = (self.expr(&i.arr, f), self.expr(&i.idx, f));
         let (ok, len, cmp) = (self.reg(), self.length(arr, f), self.reg());
         let (err, after) = (self.label(), self.label());
         f.push(Bin { op: Ge, dst: ok, lr: [idx, Const(0)] })
-          .push(Bin { op: Lt, dst: cmp, lr: [idx, Reg(len)] })
+          .push(Bin { op: Lt, dst: cmp, lr: [idx, len] })
           .push(Bin { op: And, dst: ok, lr: [Reg(ok), Reg(cmp)] })
           .push(Jif { label: err, z: true, cond: [Reg(ok)] });
         // range check passed if reach here
         let off = self.reg();
         f.push(Bin { op: Mul, dst: off, lr: [idx, Const(INT_SIZE)] })
           .push(Bin { op: Add, dst: off, lr: [Reg(off), arr] });
-        let ret = match assign {
-          Some(src) => (f.push(Store { src_base: [src, Reg(off)], off: 0, hint: MemHint::Arr }), 0).1,
-          None => {
-            let reg = self.reg();
-            (f.push(Load { dst: reg, base: [Reg(off)], off: 0, hint: MemHint::Arr }), reg).1
-          }
+        let ret = if let Some(src) = assign {
+          f.push(Store { src_base: [src, Reg(off)], off: 0, hint: MemHint::Arr });
+          Reg(0)
+        } else {
+          let dst = self.reg();
+          f.push(Load { dst, base: [Reg(off)], off: 0, hint: MemHint::Arr });
+          Reg(dst)
         };
         f.push(Jmp { label: after });
         self.re(INDEX_OUT_OF_BOUND, f.push(Label { label: err }));
         f.push(Label { label: after });
         ret
-      }),
+      }
       IntLit(i) => Const(*i),
       BoolLit(b) => Const(*b as i32),
       StringLit(s) => {
@@ -237,7 +234,7 @@ impl<'a> TacGen<'a> {
       NullLit(_) => Const(0),
       Call(c) => {
         let v = if let ExprKind::VarSel(v) = &c.func.kind { v } else { unimplemented!() };
-        Reg(match &v.owner {
+        match &v.owner {
           Some(o) if o.ty.get().is_arr() => {
             let arr = self.expr(o, f);
             self.length(arr, f)
@@ -251,30 +248,27 @@ impl<'a> TacGen<'a> {
               arg_arr: c.arg.iter().any(|a| a.ty.get().arr > 0),
             };
             if fu.static_ {
-              for a in args {
-                f.push(Param { src: [a] });
-              }
-              f.push(TacKind::Call { dst: ret, kind: CallKind::Static(self.func_info[&Ref(fu)].idx, hint) });
+              for a in args { f.push(Param { src: [a] }); }
+              f.push(Tac::Call { dst: ret, kind: CallKind::Static(self.func_info[&Ref(fu)].idx, hint) });
             } else {
               // Reg(0) is `this`
               let owner = v.owner.as_ref().map(|o| self.expr(o, f)).unwrap_or(Reg(0));
               f.push(Param { src: [owner] });
-              for a in args {
-                f.push(Param { src: [a] });
-              }
+              for a in args { f.push(Param { src: [a] }); }
               let slot = self.reg();
               let off = self.func_info[&Ref(fu)].off;
               f.push(Load { dst: slot, base: [owner], off: 0, hint: MemHint::Immutable })
                 .push(Load { dst: slot, base: [Reg(slot)], off: off as i32 * INT_SIZE, hint: MemHint::Immutable });
-              f.push(TacKind::Call { dst: ret, kind: CallKind::Virtual([Reg(slot)], hint) });
+              f.push(Tac::Call { dst: ret, kind: CallKind::Virtual([Reg(slot)], hint) });
             }
-            ret.unwrap_or(0) // if ret is None, the result can't be assigned to others, so 0 will not be used
+            Reg(ret.unwrap_or(0)) // if ret is None, the result can't be assigned to others, so 0 will not be used
           }
-        })
+        }
       }
       Unary(u) => {
         let (r, dst) = (self.expr(&u.r, f), self.reg());
-        (f.push(Un { op: u.op, dst, r: [r] }), Reg(dst)).1
+        f.push(Un { op: u.op, dst, r: [r] });
+        Reg(dst)
       }
       Binary(b) => {
         let (l, r) = (self.expr(&b.l, f), self.expr(&b.r, f));
@@ -289,20 +283,21 @@ impl<'a> TacGen<'a> {
           }
           op => {
             let dst = self.reg();
-            (f.push(Bin { op, dst, lr: [l, r] }), Reg(dst)).1
+            f.push(Bin { op, dst, lr: [l, r] });
+            Reg(dst)
           }
         }
       }
       This(_) => Reg(0),
       ReadInt(_) => Reg(self.intrinsic(_ReadInt, f).unwrap()),
       ReadLine(_) => Reg(self.intrinsic(_ReadLine, f).unwrap()),
-      NewClass(n) => Reg({
+      NewClass(n) => {
         let dst = self.reg();
         // by design, a class's new func in functions have the same index as its vtbl in vtbls
-        f.push(TacKind::Call { dst: Some(dst), kind: CallKind::Static(self.class_info[&Ref(n.class.get().unwrap())].idx, CallHint { arg_obj: false, arg_arr: false }) });
-        dst
-      }),
-      NewArray(n) => Reg({
+        f.push(Tac::Call { dst: Some(dst), kind: CallKind::Static(self.class_info[&Ref(n.class.get().unwrap())].idx, CallHint { arg_obj: false, arg_arr: false }) });
+        Reg(dst)
+      }
+      NewArray(n) => {
         let len = self.expr(&n.len, f);
         let (ok, before_cond, before_body) = (self.label(), self.label(), self.label());
         let (cmp, ptr) = (self.reg(), self.reg());
@@ -324,17 +319,17 @@ impl<'a> TacGen<'a> {
           .push(Bin { op: Eq, dst: cmp, lr: [Reg(ptr), Reg(arr)] })
           .push(Jif { label: before_body, z: true, cond: [Reg(cmp)] }); // when ptr == arr, loop end
         f.push(Store { src_base: [len, Reg(arr)], off: -INT_SIZE, hint: MemHint::Immutable }); // arr[-1] = len
-        arr
-      }),
-      ClassTest(t) => Reg({
+        Reg(arr)
+      }
+      ClassTest(t) => {
         let obj = self.expr(&t.expr, f);
         self.check_cast(obj, self.class_info[&Ref(t.class.get().unwrap())].idx, f)
-      }),
+      }
       ClassCast(t) => {
         let obj = self.expr(&t.expr, f);
         let check = self.check_cast(obj, self.class_info[&Ref(t.class.get().unwrap())].idx, f);
         let (msg, vtbl, ok) = (self.reg(), self.reg(), self.label());
-        f.push(Jif { label: ok, z: false, cond: [Reg(check)] });
+        f.push(Jif { label: ok, z: false, cond: [check] });
         let s = self.define_str(BAD_CAST1); // borrow checker...
         self.intrinsic(_PrintString, f.push(LoadStr { dst: msg, s }).push(Param { src: [Reg(msg)] }));
         self.intrinsic(_PrintString, f.push(Load { dst: vtbl, base: [obj], off: 0, hint: MemHint::Immutable })
@@ -354,9 +349,10 @@ impl<'a> TacGen<'a> {
 }
 
 impl<'a> TacGen<'a> {
+  // define a string in str pool and return its id, this id can be used in Tac::LoadStr
   fn define_str(&mut self, s: &'a str) -> u32 { self.str_pool.insert_full(s).0 as u32 }
 
-  fn reg(&mut self) -> u32 { (self.reg_cnt, self.reg_cnt += 1).0 }
+  fn reg(&mut self) -> u32 { (self.reg_num, self.reg_num += 1).0 }
 
   fn label(&mut self) -> u32 { (self.label_cnt, self.label_cnt += 1).0 }
 
@@ -367,19 +363,21 @@ impl<'a> TacGen<'a> {
     ret
   }
 
+  // perform an intrinsic call, return value is Some if this intrinsic call has return value
   fn intrinsic(&mut self, i: Intrinsic, f: &mut TacFunc<'a>) -> Option<u32> {
     let ret = if i.has_ret() { Some(self.reg()) } else { None };
-    f.push(TacKind::Call { dst: ret, kind: CallKind::Intrinsic(i) });
+    f.push(Tac::Call { dst: ret, kind: CallKind::Intrinsic(i) });
     ret
   }
 
-  fn length(&mut self, arr: Operand, f: &mut TacFunc<'a>) -> u32 {
+  // read the length of `arr` (caller should guarantee `arr` is really an array)
+  fn length(&mut self, arr: Operand, f: &mut TacFunc<'a>) -> Operand {
     let ret = self.reg();
     f.push(Load { dst: ret, base: [arr], off: -(INT_SIZE as i32), hint: MemHint::Immutable });
-    ret
+    Reg(ret)
   }
 
-  // re for runtime error
+  // re is short for for runtime error; this function prints a message and call halt
   fn re(&mut self, msg: &'static str, f: &mut TacFunc<'a>) {
     let src = self.reg();
     let s = self.define_str(msg);
@@ -387,7 +385,7 @@ impl<'a> TacGen<'a> {
     self.intrinsic(_Halt, f);
   }
 
-  fn check_cast(&mut self, obj: Operand, vtbl_idx: u32, f: &mut TacFunc<'a>) -> u32 {
+  fn check_cast(&mut self, obj: Operand, vtbl_idx: u32, f: &mut TacFunc<'a>) -> Operand {
     // ret = 0
     // while (cur)
     //   ret = (cur == target)
@@ -404,29 +402,26 @@ impl<'a> TacGen<'a> {
     f.push(Load { dst: cur, base: [Reg(cur)], off: 0, hint: MemHint::Immutable });
     f.push(Jmp { label: before_cond });
     f.push(Label { label: after_body });
-    ret
+    Reg(ret)
   }
 }
 
 impl<'a> TacGen<'a> {
-  // `idx` in ClassInfo & FuncInfo is not determined here, just use 0
-  // it is guaranteed that all functions (static/virtual) are inserted into self.func_info
-  // this function depends on the fact that no cyclic inheritance exist, which is guaranteed in typeck
+  // `idx` in ClassInfo & FuncInfo is not determined here, just set them to a meaningless value (0)
+  // all functions (static & virtual) are inserted into self.func_info
+  // this function relies on the fact that no cyclic inheritance exist, which is guaranteed in typeck
   fn resolve_field(&mut self, c: &'a ClassDef<'a>) {
     if !self.class_info.contains_key(&Ref(c)) {
       let (mut field_cnt, mut vtbl) = if let Some(p) = c.parent_ref.get() {
         self.resolve_field(p);
         let p = &self.class_info[&Ref(p)];
         (p.field_cnt, p.vtbl.clone())
-      } else {
-        // starting from 1, partly because of vtbl is at 0, mainly because > 0 can be used to determine whether already resolved
-        (1, IndexMap::default())
-      };
+      } else { (1, IndexMap::default()) };
       for f in &c.field {
         match f {
           FieldDef::FuncDef(f) => if !f.static_ {
             if let Some((idx, _, p_f)) = vtbl.get_full_mut(f.name) {
-              // + 2 for 0 is parent vtbl, 1 is class name
+              // + 2, because 0 is parent vtbl, 1 is class name
               self.func_info.insert(Ref(f), FuncInfo { off: idx as u32 + 2, idx: 0 });
               *p_f = f; // override
             } else {
@@ -434,7 +429,7 @@ impl<'a> TacGen<'a> {
               vtbl.insert(f.name, f);
             }
           } else {
-            // off is useless for static functions
+            // `off` is useless for static functions
             self.func_info.insert(Ref(f), FuncInfo { off: 0, idx: 0 });
           }
           FieldDef::VarDef(v) => {
@@ -447,10 +442,10 @@ impl<'a> TacGen<'a> {
     }
   }
 
-  fn build_new(&mut self, c: &'a ClassDef<'a>, alloc: &'a Arena<Tac<'a>>) -> TacFunc<'a> {
-    self.reg_cnt = 0;
+  fn build_new(&mut self, c: &'a ClassDef<'a>, alloc: &'a Arena<TacNode<'a>>) -> TacFunc<'a> {
+    self.reg_num = 0;
     let ClassInfo { field_cnt, idx, .. } = self.class_info[&Ref(c)];
-    let mut f = TacFunc::empty(alloc, FuncNameKind::New { class: c.name }, 0, true);
+    let mut f = TacFunc::empty(alloc, format!("_{}._new", c.name), 0);
     f.push(Param { src: [Const(field_cnt as i32 * INT_SIZE)] });
     let ret = self.intrinsic(_Alloc, &mut f).unwrap();
     let vtbl = self.reg();
@@ -460,7 +455,7 @@ impl<'a> TacGen<'a> {
       f.push(Store { src_base: [Const(0), Reg(ret)], off: i as i32 * INT_SIZE, hint: MemHint::Obj });
     }
     f.push(Ret { src: Some([Reg(ret)]) });
-    f.max_reg = self.reg_cnt;
+    f.reg_num = self.reg_num;
     f
   }
 }

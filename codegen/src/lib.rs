@@ -15,7 +15,7 @@ pub enum Reg {
 
 impl Reg {
   // no matter what kind of reg it is, this function just return its id, although their meaning may be different
-  pub fn id(&self) -> u32 {
-    match *self { Reg::PreColored(r) => r, Reg::Allocated(r) => r, Reg::Virtual(r) => r }
+  pub fn id(self) -> u32 {
+    match self { Reg::PreColored(r) => r, Reg::Allocated(r) => r, Reg::Virtual(r) => r }
   }
 }

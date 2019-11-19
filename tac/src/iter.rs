@@ -1,23 +1,23 @@
-use crate::Tac;
+use crate::TacNode;
 use std::iter::FusedIterator;
 
 // these codes are basically copied from std::collections::LinkedList
 
 #[derive(Copy, Clone)]
 pub struct TacIter<'a> {
-  first: Option<&'a Tac<'a>>,
-  last: Option<&'a Tac<'a>>,
+  first: Option<&'a TacNode<'a>>,
+  last: Option<&'a TacNode<'a>>,
   len: usize,
 }
 
 impl<'a> TacIter<'a> {
-  pub fn new(first: Option<&'a Tac<'a>>, last: Option<&'a Tac<'a>>, len: usize) -> TacIter<'a> {
+  pub fn new(first: Option<&'a TacNode<'a>>, last: Option<&'a TacNode<'a>>, len: usize) -> TacIter<'a> {
     TacIter { first, last, len }
   }
 }
 
 impl<'a> Iterator for TacIter<'a> {
-  type Item = &'a Tac<'a>;
+  type Item = &'a TacNode<'a>;
 
   fn next(&mut self) -> Option<Self::Item> {
     if self.len != 0 {

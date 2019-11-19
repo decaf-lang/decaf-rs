@@ -1,6 +1,6 @@
 use crate::{bb::{FuncBB, BB}, flow::{FlowElem, Flow, And}};
 use common::{HashSet, HashMap, IndexSet};
-use tac::{TacKind, Operand};
+use tac::{Tac, Operand};
 use bitset::traits::*;
 
 pub fn work(f: &mut FuncBB) {
@@ -8,7 +8,7 @@ pub fn work(f: &mut FuncBB) {
   let mut copy2id = IndexSet::default();
   for b in &mut f.bb {
     for t in b.iter() {
-      if let TacKind::Assign { dst, src } = t.payload.borrow().kind {
+      if let Tac::Assign { dst, src } = t.tac.get() {
         if let Operand::Reg(src) = src[0] {
           if dst == src { // just delete it, doesn't even need propagation
             b.del(t);
@@ -39,15 +39,14 @@ pub fn work(f: &mut FuncBB) {
 
 fn compute_gen_kill(b: &BB, gen: &mut [u32], kill: &mut [u32], reg2copy: &HashMap<u32, Box<[u32]>>, copy2id: &IndexSet<(u32, u32)>) {
   for t in b.iter() {
-    let payload = t.payload.borrow();
-    let kind = &payload.kind;
-    kind.rw().1.map(|w| reg2copy.get(&w).map(|copy| {
+    let tac = t.tac.get();
+    tac.rw().1.map(|w| reg2copy.get(&w).map(|copy| {
       kill.bsor(copy);
       gen.bsandn(copy);
     }));
-    if let TacKind::Assign { dst, src } = kind {
+    if let Tac::Assign { dst, src } = tac {
       if let Operand::Reg(src) = src[0] {
-        gen.bsset(copy2id.get_full(&(*dst, src)).unwrap().0);
+        gen.bsset(copy2id.get_full(&(dst, src)).unwrap().0);
       }
     }
   }
@@ -63,17 +62,15 @@ fn do_optimize(b: &mut BB, in_: &mut [u32], reg2copy: &HashMap<u32, Box<[u32]>>,
     reg // failed to find any further copy, just return reg
   }
   for t in b.iter() {
-    let mut payload = t.payload.borrow_mut();
-    let kind = &mut payload.kind;
-    // save it, because may modify then
-    let old_assign = if let TacKind::Assign { dst, src } = kind {
-      if let Operand::Reg(src) = src[0] { Some((*dst, src)) } else { None }
-    } else { None };
+    let mut tac = t.tac.get();
     // modify the operand to do copy propagation
-    kind.rw_mut().0.iter_mut().for_each(|r| if let Operand::Reg(reg) = r { *reg = lookup(*reg, in_, copy2id) });
+    tac.rw_mut().0.iter_mut().for_each(|r| if let Operand::Reg(reg) = r { *reg = lookup(*reg, in_, copy2id) });
     // compute in_ for the next tac
-    kind.rw().1.map(|w| reg2copy.get(&w).map(|copy| in_.bsandn(copy)));
-    if let Some(a) = old_assign { in_.bsset(copy2id.get_full(&a).unwrap().0) }
+    tac.rw().1.map(|w| reg2copy.get(&w).map(|copy| in_.bsandn(copy)));
+    if let Tac::Assign { dst, src: [Operand::Reg(src)] } = t.tac.get() { // old value
+      in_.bsset(copy2id.get_full(&(dst, src)).unwrap().0)
+    }
+    t.tac.set(tac);
   }
   if let Some(r) = b.next_r_mut() { *r = lookup(*r, in_, copy2id); }
 }
