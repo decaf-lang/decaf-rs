@@ -142,9 +142,9 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
       if !(b1.prev.is_empty() || (b1.prev.len() == 1 && b1.prev[0] + 1 == idx as u32)) {
         b2.push(AsmTemplate::Label(format!("{}_L{}:", self.name, idx + 1)));
       }
-      let mut arg_cnt = 0;
+      let mut arg_num = 0;
       for t in b1.iter() {
-        self.select_inst(t.tac.get(), &mut b2, &mut arg_cnt);
+        self.select_inst(t.tac.get(), &mut b2, &mut arg_num);
       }
       // generate ret/jmp/..., and return the `next` by the way
       let next = self.build_next(idx as u32, f.bb.len() as u32 + 1, b1.next, &mut b2);
@@ -266,7 +266,7 @@ impl FuncGen<'_, '_> {
 }
 
 impl FuncGen<'_, '_> {
-  fn select_inst(&mut self, t: Tac, b: &mut Vec<AsmTemplate>, arg_cnt: &mut u32) {
+  fn select_inst(&mut self, t: Tac, b: &mut Vec<AsmTemplate>, arg_num: &mut u32) {
     use AsmTemplate::*;
     match t {
       Tac::Bin { op, dst, lr } => {
@@ -290,11 +290,11 @@ impl FuncGen<'_, '_> {
       Tac::Assign { dst, src } => self.build_mv(vreg(dst), src[0], b),
       Tac::Param { src } => {
         let src = self.build_operand(src[0], b);
-        match ARG.nth(*arg_cnt as usize) {
+        match ARG.nth(*arg_num as usize) {
           Some(a) => b.push(Mv(Reg::PreColored(a), src)),
-          None => b.push(Sw(src, mreg(SP), Imm::Int(*arg_cnt as i32 * WORD_SIZE))),
+          None => b.push(Sw(src, mreg(SP), Imm::Int(*arg_num as i32 * WORD_SIZE))),
         }
-        *arg_cnt += 1;
+        *arg_num += 1;
       }
       Tac::Call { dst, kind } => {
         let called = match kind {
@@ -312,9 +312,9 @@ impl FuncGen<'_, '_> {
         if called {
           // once it is really a function call, ch_param_num should grows from 4
           // because calling convention says the first 4 argument should have their slots on the stack
-          self.ch_param_num = self.ch_param_num.max(*arg_cnt).max(4);
+          self.ch_param_num = self.ch_param_num.max(*arg_num).max(4);
         }
-        *arg_cnt = 0;
+        *arg_num = 0;
         if let Some(dst) = dst { b.push(Mv(vreg(dst), mreg(V0))); }
       }
       Tac::Load { dst, base, off, .. } => {
@@ -325,7 +325,6 @@ impl FuncGen<'_, '_> {
         let (src, base) = (self.build_operand(src_base[0], b), self.build_operand(src_base[1], b));
         b.push(Sw(src, base, Imm::Int(off)));
       }
-      Tac::LoadInt { dst, i } => b.push(AsmTemplate::Li(vreg(dst), Imm::Int(i))),
       Tac::LoadStr { dst, s } => b.push(AsmTemplate::La(vreg(dst), format!("_STRING{}", s))),
       Tac::LoadVTbl { dst, v } => b.push(AsmTemplate::La(vreg(dst), format!("_{}", self.program.vtbl[v as usize].class))),
       Tac::LoadFunc { dst, f } => b.push(AsmTemplate::La(vreg(dst), self.program.func[f as usize].name.clone())),

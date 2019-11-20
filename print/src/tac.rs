@@ -47,7 +47,6 @@ pub fn write_tac(t: Tac, pr: &TacProgram, p: &mut IndentPrinter) {
     Label { label } => write!(p, "_L{}:", label),
     Load { dst, base, off, .. } => write!(p, "_T{} = *({:?} {} {})", dst, base[0], if off >= 0 { '+' } else { '-' }, off.abs()),
     Store { src_base, off, .. } => write!(p, "*({:?} {} {}) = {:?}", src_base[1], if off >= 0 { '+' } else { '-' }, off.abs(), src_base[0]),
-    LoadInt { dst, i } => write!(p, "_T{} = {}", dst, i),
     LoadStr { dst, s } => write!(p, "_T{} = \"{}\"", dst, pr.str_pool.get_index(s as usize).unwrap()),
     LoadVTbl { dst, v } => write!(p, "_T{} = VTBL<_{}>", dst, pr.vtbl[v as usize].class),
     LoadFunc { dst, f } => write!(p, "_T{} = FUNC<{}>", dst, pr.func[f as usize].name),

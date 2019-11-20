@@ -36,7 +36,6 @@ fn transfer(tac: Tac, env: &mut [Value]) {
     },
     Assign { dst, src } => env[dst as usize] = match src[0] { Const(r) => C(r), Reg(r) => env[r as usize] },
     Call { dst, .. } => if let Some(dst) = dst { env[dst as usize] = Nac }
-    LoadInt { dst, i } => env[dst as usize] = C(i),
     Load { dst, .. } => env[dst as usize] = Nac,
     // actually LoadStr and LoadVTbl won't give `dst` a Unk
     // but as long as the implementation is correct, `dst` can never be used in calculation, so giving them Unk is okay

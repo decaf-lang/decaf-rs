@@ -79,7 +79,6 @@ pub enum Tac {
   // for Store: Immutable => it doesn't affect any Load result, Obj => correspond to Obj in Load, Arr => like Obj
   Load { dst: u32, base: [Operand; 1], off: i32, hint: MemHint },
   Store { src_base: [Operand; 2], off: i32, hint: MemHint },
-  LoadInt { dst: u32, i: i32 },
   // s: the index in TacProgram::str_pool
   LoadStr { dst: u32, s: u32 },
   // v: the index in TacProgram::vtbl
@@ -101,7 +100,7 @@ impl Tac {
       Jmp { .. } | Label { .. } => (&[], None),
       Jif { cond, .. } => (cond, None),
       Store { src_base, .. } => (src_base, None),
-      LoadInt { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => (&[], Some(*dst)),
+      LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => (&[], Some(*dst)),
     }
   }
 
@@ -119,7 +118,7 @@ impl Tac {
       Jmp { .. } | Label { .. } => (&mut [], None),
       Jif { cond, .. } => (cond, None),
       Store { src_base, .. } => (src_base, None),
-      LoadInt { dst, .. } | LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => (&mut [], Some(dst)),
+      LoadStr { dst, .. } | LoadVTbl { dst, .. } | LoadFunc { dst, .. } => (&mut [], Some(dst)),
     }
   }
 }

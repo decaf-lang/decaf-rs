@@ -8,8 +8,9 @@ use crate::info::*;
 
 #[derive(Default)]
 struct TacGen<'a> {
+  // `reg_num` and `label_num` are manually set at the beginning of every function
   reg_num: u32,
-  label_cnt: u32,
+  label_num: u32,
   loop_stk: Vec<u32>,
   // Id & Index will behave differently when they are the lhs of an assignment
   // cur_assign contains the current assign rhs operand, or None if the current handling expr doesn't involve in assign
@@ -54,7 +55,7 @@ impl<'a> TacGen<'a> {
           }
           // these regs are occupied by parameters
           self.reg_num = fu.param.len() as u32 + this;
-          self.label_cnt = 0;
+          self.label_num = 0;
           let name = if Ref(c) == Ref(p.main.get().unwrap()) && fu.name == MAIN_METHOD { MAIN_METHOD.into() } else { format!("_{}.{}", c.name, fu.name) };
           let mut f = TacFunc::empty(alloc, name, self.reg_num);
           self.block(&fu.body, &mut f);
@@ -227,9 +228,9 @@ impl<'a> TacGen<'a> {
       IntLit(i) => Const(*i),
       BoolLit(b) => Const(*b as i32),
       StringLit(s) => {
-        let s1 = self.reg();
-        f.push(LoadStr { dst: s1, s: self.define_str(s) });
-        Reg(s1)
+        let dst = self.reg();
+        f.push(LoadStr { dst, s: self.define_str(s) });
+        Reg(dst)
       }
       NullLit(_) => Const(0),
       Call(c) => {
@@ -354,27 +355,27 @@ impl<'a> TacGen<'a> {
 
   fn reg(&mut self) -> u32 { (self.reg_num, self.reg_num += 1).0 }
 
-  fn label(&mut self) -> u32 { (self.label_cnt, self.label_cnt += 1).0 }
+  fn label(&mut self) -> u32 { (self.label_num, self.label_num += 1).0 }
 
   // if you don't need to modify the returned register, it is more recommended to use Const(i)
   fn int(&mut self, i: i32, f: &mut TacFunc<'a>) -> u32 {
-    let ret = self.reg();
-    f.push(LoadInt { dst: ret, i });
-    ret
+    let dst = self.reg();
+    f.push(Tac::Assign { dst, src: [Const(i)] });
+    dst
   }
 
   // perform an intrinsic call, return value is Some if this intrinsic call has return value
   fn intrinsic(&mut self, i: Intrinsic, f: &mut TacFunc<'a>) -> Option<u32> {
-    let ret = if i.has_ret() { Some(self.reg()) } else { None };
-    f.push(Tac::Call { dst: ret, kind: CallKind::Intrinsic(i) });
-    ret
+    let dst = if i.has_ret() { Some(self.reg()) } else { None };
+    f.push(Tac::Call { dst, kind: CallKind::Intrinsic(i) });
+    dst
   }
 
   // read the length of `arr` (caller should guarantee `arr` is really an array)
   fn length(&mut self, arr: Operand, f: &mut TacFunc<'a>) -> Operand {
-    let ret = self.reg();
-    f.push(Load { dst: ret, base: [arr], off: -(INT_SIZE as i32), hint: MemHint::Immutable });
-    Reg(ret)
+    let dst = self.reg();
+    f.push(Load { dst, base: [arr], off: -(INT_SIZE as i32), hint: MemHint::Immutable });
+    Reg(dst)
   }
 
   // re is short for for runtime error; this function prints a message and call halt
@@ -412,10 +413,10 @@ impl<'a> TacGen<'a> {
   // this function relies on the fact that no cyclic inheritance exist, which is guaranteed in typeck
   fn resolve_field(&mut self, c: &'a ClassDef<'a>) {
     if !self.class_info.contains_key(&Ref(c)) {
-      let (mut field_cnt, mut vtbl) = if let Some(p) = c.parent_ref.get() {
+      let (mut field_num, mut vtbl) = if let Some(p) = c.parent_ref.get() {
         self.resolve_field(p);
         let p = &self.class_info[&Ref(p)];
-        (p.field_cnt, p.vtbl.clone())
+        (p.field_num, p.vtbl.clone())
       } else { (1, IndexMap::default()) };
       for f in &c.field {
         match f {
@@ -433,25 +434,25 @@ impl<'a> TacGen<'a> {
             self.func_info.insert(Ref(f), FuncInfo { off: 0, idx: 0 });
           }
           FieldDef::VarDef(v) => {
-            self.var_info.insert(Ref(v), VarInfo { off: field_cnt });
-            field_cnt += 1;
+            self.var_info.insert(Ref(v), VarInfo { off: field_num });
+            field_num += 1;
           }
         }
       }
-      self.class_info.insert(Ref(c), ClassInfo { field_cnt, idx: 0, vtbl });
+      self.class_info.insert(Ref(c), ClassInfo { field_num, idx: 0, vtbl });
     }
   }
 
   fn build_new(&mut self, c: &'a ClassDef<'a>, alloc: &'a Arena<TacNode<'a>>) -> TacFunc<'a> {
     self.reg_num = 0;
-    let ClassInfo { field_cnt, idx, .. } = self.class_info[&Ref(c)];
+    let ClassInfo { field_num, idx, .. } = self.class_info[&Ref(c)];
     let mut f = TacFunc::empty(alloc, format!("_{}._new", c.name), 0);
-    f.push(Param { src: [Const(field_cnt as i32 * INT_SIZE)] });
+    f.push(Param { src: [Const(field_num as i32 * INT_SIZE)] });
     let ret = self.intrinsic(_Alloc, &mut f).unwrap();
     let vtbl = self.reg();
     f.push(LoadVTbl { dst: vtbl, v: idx });
     f.push(Store { src_base: [Reg(vtbl), Reg(ret)], off: 0, hint: MemHint::Immutable });
-    for i in 1..field_cnt {
+    for i in 1..field_num {
       f.push(Store { src_base: [Const(0), Reg(ret)], off: i as i32 * INT_SIZE, hint: MemHint::Obj });
     }
     f.push(Ret { src: Some([Reg(ret)]) });
