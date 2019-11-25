@@ -157,7 +157,7 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
     use AsmTemplate::*;
     let (mut pro, mut epi) = (Vec::new(), Vec::new());
     pro.push(BinI(BinOp::Sub, mreg(SP), mreg(SP), Imm::Tag(0)));
-    // f use _Ti for the ith argument
+    // f use %i for the ith argument
     for i in 0..self.param_num {
       match ARG.nth(i as usize) {
         Some(a) => pro.push(AsmTemplate::Mv(vreg(i), Reg::PreColored(a))),

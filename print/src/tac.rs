@@ -32,23 +32,23 @@ pub fn program(pr: &TacProgram, p: &mut IndentPrinter) {
 pub fn write_tac(t: Tac, pr: &TacProgram, p: &mut IndentPrinter) {
   use Tac::*;
   match t {
-    Bin { op, dst, lr } => write!(p, "_T{} = ({:?} {} {:?})", dst, lr[0], op.to_op_str(), lr[1]),
-    Un { op, dst, r } => write!(p, "_T{} = {} {:?}", dst, op.to_op_str(), r[0]),
-    Assign { dst, src } => write!(p, "_T{} =  {:?}", dst, src[0]),
+    Bin { op, dst, lr } => write!(p, "%{} = ({:?} {} {:?})", dst, lr[0], op.to_op_str(), lr[1]),
+    Un { op, dst, r } => write!(p, "%{} = {} {:?}", dst, op.to_op_str(), r[0]),
+    Assign { dst, src } => write!(p, "%{} = {:?}", dst, src[0]),
     Param { src } => write!(p, "parm {:?}", src[0]),
-    Call { dst, kind, } => write!(p, "{}call {}", dst.map(|dst| format!("_T{} = ", dst)).unwrap_or(String::new()), match kind {
+    Call { dst, kind, } => write!(p, "{}call {}", dst.map(|dst| format!("%{} = ", dst)).unwrap_or(String::new()), match kind {
       CallKind::Virtual(fp, _) => format!("{:?}", fp[0]),
       CallKind::Static(f, _) => pr.func[f as usize].name.clone(),
       CallKind::Intrinsic(i) => i.name().to_owned(),
     }),
     Ret { src } => if let Some(src) = src { write!(p, "return {:?}", src[0]) } else { write!(p, "return") },
-    Jmp { label } => write!(p, "branch _L{}", label),
-    Jif { label, z, cond } => write!(p, "if ({:?} {} 0) branch _L{}", cond[0], if z { "==" } else { "!=" }, label),
-    Label { label } => write!(p, "_L{}:", label),
-    Load { dst, base, off, .. } => write!(p, "_T{} = *({:?} {} {})", dst, base[0], if off >= 0 { '+' } else { '-' }, off.abs()),
+    Jmp { label } => write!(p, "branch %{}", label),
+    Jif { label, z, cond } => write!(p, "if ({:?} {} 0) branch %{}", cond[0], if z { "==" } else { "!=" }, label),
+    Label { label } => write!(p, "%{}:", label),
+    Load { dst, base, off, .. } => write!(p, "%{} = *({:?} {} {})", dst, base[0], if off >= 0 { '+' } else { '-' }, off.abs()),
     Store { src_base, off, .. } => write!(p, "*({:?} {} {}) = {:?}", src_base[1], if off >= 0 { '+' } else { '-' }, off.abs(), src_base[0]),
-    LoadStr { dst, s } => write!(p, "_T{} = \"{}\"", dst, pr.str_pool.get_index(s as usize).unwrap()),
-    LoadVTbl { dst, v } => write!(p, "_T{} = VTBL<_{}>", dst, pr.vtbl[v as usize].class),
-    LoadFunc { dst, f } => write!(p, "_T{} = FUNC<{}>", dst, pr.func[f as usize].name),
+    LoadStr { dst, s } => write!(p, "%{} = \"{}\"", dst, pr.str_pool.get_index(s as usize).unwrap()),
+    LoadVTbl { dst, v } => write!(p, "%{} = VTBL<_{}>", dst, pr.vtbl[v as usize].class),
+    LoadFunc { dst, f } => write!(p, "%{} = FUNC<{}>", dst, pr.func[f as usize].name),
   }.ignore();
 }

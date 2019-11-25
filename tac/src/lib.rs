@@ -136,7 +136,7 @@ pub enum Operand { Reg(u32), Const(i32) }
 
 impl Debug for Operand {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    match self { Operand::Reg(r) => write!(f, "_T{}", r), Operand::Const(c) => write!(f, "{}", c) }
+    match self { Operand::Reg(r) => write!(f, "%{}", r), Operand::Const(c) => write!(f, "{}", c) }
   }
 }
 
