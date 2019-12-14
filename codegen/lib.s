@@ -30,9 +30,9 @@ _ReadLine:
 _RLLoop:
   lb $a1, ($a0)
   beqz $a1, _RLDone
-  addi $a1, $a1, -10
+  addiu $a1, $a1, -10
   beqz $a1, _RLDone
-  addi $a0, $a0, 1
+  addiu $a0, $a0, 1
   j _RLLoop
 _RLDone:
   sb $a1, ($a0) # store '\0' on original '\n' or '\0'

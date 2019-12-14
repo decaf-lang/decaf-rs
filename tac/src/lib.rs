@@ -140,12 +140,10 @@ impl Debug for Operand {
   }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, strum_macros::IntoStaticStr)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Intrinsic { _Alloc, _ReadLine, _ReadInt, _StringEqual, _PrintInt, _PrintString, _PrintBool, _Halt }
 
 impl Intrinsic {
-  pub fn name(self) -> &'static str { self.into() } // `into` provided by strum_macros::IntoStaticStr
-
   pub fn has_ret(self) -> bool {
     use Intrinsic::*;
     match self { _Alloc | _ReadLine | _ReadInt | _StringEqual => true, _PrintInt | _PrintString | _PrintBool | _Halt => false }

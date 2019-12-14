@@ -8,16 +8,19 @@ pub trait AllocCtx: Sized {
   // number of registers to allocate
   const K: u32;
 
-  // return (initial virtual register, initial nodes)
-  // pre-colored and normal registers are indexed in the same way, you can make a difference between them by using different number ranges
+  // return (initial virtual registers, initial nodes)
+  // pre-colored and normal registers are indexed in the same way, you can distinguish them by using different number ranges
   fn initial(&self) -> (Vec<u32>, Vec<Node>);
 
-  // build inference graph
+  // build inference graph, this should include building all edges and all possible moves
+  // to be more specific, implementation should call allocator.add_edge to build edges
+  // and initialize allocator.work_list_moves, allocator.nodes[..].move_list to build moves
   fn build(&self, allocator: &mut Allocator<Self>);
 
   // generate spill related code, no need to build inference graph here, because build() will be called again
   fn rewrite(&mut self, spilled_nodes: &HashSet<u32>);
 
+  // use result[..].color to replace transform virtual registers in asm into physical registers
   fn finish(&mut self, result: &[Node]);
 }
 
@@ -177,13 +180,13 @@ impl<A: AllocCtx> Allocator<A> {
           Reg::Virtual(_) => {}
         };
       }
-      // PreColored select_stack should never be added to select_stack, so this assign will not violate the requirement
-      match available.iter().nth(0) {
-        Some(r) => {
-          self.nodes[n as usize].color = Reg::Allocated(*r);
-        }
-        None => { self.spilled_nodes.insert(n); }
-      };
+      // PreColored nodes should never be added to select_stack
+      // so this color assignment will not give a PreColored node a wrong color
+      if let Some(r) = available.iter().nth(0) {
+        self.nodes[n as usize].color = Reg::Allocated(*r);
+      } else {
+        self.spilled_nodes.insert(n);
+      }
     }
     self.select_stack.clear();
     for &n in &self.coalesced_nodes {

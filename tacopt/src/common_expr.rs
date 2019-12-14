@@ -152,7 +152,7 @@ impl<'a> WorkCtx<'a> {
   }
 
   fn do_optimize(&mut self, idx: usize, f: &mut FuncBB<'a>, in_: &mut [u32]) {
-    for (t_idx, t) in f.bb[idx].iter().enumerate() {
+    for t in f.bb[idx].iter() {
       let tac = t.tac.get();
       if let Some(rhs) = TacRhs::from_tac(tac) {
         let rhs = self.rhs2id[&rhs];
@@ -160,7 +160,9 @@ impl<'a> WorkCtx<'a> {
           let new = f.new_reg();
           for v in &mut self.vis { *v = false; }
           // `prev` will iterate over all tac before `t` reversely
-          let prev = TacIter::new(f.bb[idx].first, Some(t), t_idx + 1).rev().skip(1);
+          // TacIter::len is set to infinity (!0), so will iterate over all tac between `first` (inclusive) and `t` (exclusive)
+          // can't use .iter().enumerate() to get the current length between `first` and `t`, because `dfs` may insert new tac
+          let prev = TacIter::new(f.bb[idx].first, Some(t), !0).rev().skip(1);
           self.dfs(idx, f, prev, rhs, new);
           let dst = tac.rw().1.expect("The tac with rhs must also have a lhs.");
           t.tac.set(Tac::Assign { dst, src: [Operand::Reg(new)] });

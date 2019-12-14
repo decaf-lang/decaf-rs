@@ -63,10 +63,7 @@ pub enum Imm {
 }
 
 impl AsmTemplate {
-  pub fn is_mv(&self) -> bool {
-    match self { AsmTemplate::Mv(_, _) => true, _ => false, }
-  }
-
+  // clear `r` and `w`, put all registers it reads into `r`, put all registers it writes into `w`
   pub fn rw(&self, r: &mut Vec<Reg>, w: &mut Vec<Reg>) {
     use AsmTemplate::*;
     r.clear();
@@ -190,6 +187,7 @@ impl fmt::Debug for AsmTemplate {
   }
 }
 
+// we will output a lot of pseudo mips instructions, and depend on assembler or simulator to translate these pseudo instructions
 pub fn bin_str(op: BinOp) -> &'static str {
   use BinOp::*;
   match op { Add => "addu", Sub => "subu", Mul => "mul", Div => "div", Mod => "rem", And => "and", Or => "or", Eq => "seq", Ne => "sne", Lt => "slt", Le => "sle", Gt => "sgt", Ge => "sge" }

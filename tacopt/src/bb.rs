@@ -4,8 +4,8 @@ use typed_arena::Arena;
 
 pub struct BB<'a> {
   pub len: u32,
-  // the ret/jmp/jif/label is NOT contained in the link list defined by first -> last
-  // don't forget ret/jif may contain a register in data flow analysis
+  // the ret/jmp/jif/label is NOT included in the link list defined by first -> last
+  // don't forget that ret/jif may read a register in data flow analysis
   pub first: Option<&'a TacNode<'a>>,
   pub last: Option<&'a TacNode<'a>>,
   pub next: NextKind,
@@ -22,6 +22,8 @@ pub enum NextKind {
 }
 
 impl BB<'_> {
+  // return the out edges of this bb
+  // there are 2 out edges in one bb at most, so the return value's type is `[Option<u32>; 2]`
   pub fn next(&self) -> [Option<u32>; 2] {
     match self.next {
       NextKind::Ret(_) | NextKind::Halt => [None, None],
@@ -30,7 +32,7 @@ impl BB<'_> {
     }
   }
 
-  // return the register it reads(if any)
+  // returns the register id it reads(if any)
   pub fn next_r(&self) -> Option<u32> {
     match self.next {
       NextKind::Ret(r) => match r { Some(Operand::Reg(r)) => Some(r), _ => None }
@@ -39,6 +41,7 @@ impl BB<'_> {
     }
   }
 
+  // returns mut ref to the register id it reads(if any)
   pub fn next_r_mut(&mut self) -> Option<&mut u32> {
     match &mut self.next {
       NextKind::Ret(r) => match r { Some(Operand::Reg(r)) => Some(r), _ => None }
@@ -53,7 +56,9 @@ impl<'a> BB<'a> {
     TacIter::new(self.first, self.last, self.len as usize)
   }
 
-  // the link on t is not cut down, so you can safely del a tac while iterating over it
+  // delete `t` from the linked list in self
+  // `t` should belong to that linked list, but it is not checked
+  // the link on `t` is not cut down, so you can safely delete a tac while iterating over it
   pub fn del(&mut self, t: &'a TacNode<'a>) {
     self.len -= 1;
     match self.first {
@@ -75,6 +80,8 @@ impl<'a> BB<'a> {
     }
   }
 
+  // insert `new` after `loc` in the linked list in self
+  // `loc` should belong to that linked list, but it is not checked
   pub fn insert_after(&mut self, loc: &'a TacNode<'a>, new: &'a TacNode<'a>) {
     self.len += 1;
     match self.last {
@@ -94,8 +101,8 @@ impl<'a> BB<'a> {
   }
 
   // `prev_with_entry` means returning an iterator yielding `prev` list element
-  // while adding an virtual entry node, which has an edge to the first reachable node
-  // `this` is self's index + 1, noting that the first reachable node's index must be 0
+  // while adding an virtual entry node, which has an edge to the first node
+  // `this` is self's index in FuncBB::bb + 1, so `this == 1` means that it is the first node
   pub fn prev_with_entry<'b>(&'b self, this: usize) -> (usize, impl IntoIterator<Item=usize> + Clone + 'b) {
     (this, self.prev.iter().map(|x| *x as usize + 1).chain(if this == 1 { Some(0) } else { None }))
   }
@@ -107,13 +114,15 @@ pub struct FuncBB<'a> {
   pub reg_num: u32,
   pub alloc: &'a Arena<TacNode<'a>>,
   pub bb: Vec<BB<'a>>,
-  // I admit it is a design fault, we need to clone func's name here for convenience, otherwise we may need to modify a lot of code
+  // I admit it is not perfect design, we need to clone func's name here for convenience
   // nevertheless, the affect on performance is very little
   pub name: String,
 }
 
 impl<'a> FuncBB<'a> {
-  // `f` should returns on every execution, otherwise `simplify` will panic
+  // construct control flow graph from `f`, the returned `FuncBB` contains such information
+  // only `FuncBB` can be used for future optimization and codegen, and `TacFunc` cannot
+  // `f` should returns or halts on every execution path, otherwise `simplify` will panic
   pub fn new(f: &TacFunc<'a>) -> FuncBB<'a> {
     let mut bb = Vec::new();
     let mut label2bb = Vec::new(); // label2bb[label id] = bb id of this label
@@ -203,6 +212,7 @@ impl<'a> FuncBB<'a> {
     (self.reg_num, self.reg_num += 1).0
   }
 
+  // convert self back into a `TacFunc`, which can be used for execution
   pub fn to_tac_func(&self) -> TacFunc<'a> {
     let mut f = TacFunc::empty(self.alloc, self.name.clone(), self.param_num);
     f.reg_num = self.reg_num;
@@ -224,7 +234,9 @@ impl<'a> FuncBB<'a> {
   }
 }
 
-// possible to trigger `index out of bounds` here (if constraint is violated), see the comment in `FuncBB::new`
+// `simplify` will remove all unreachable nodes, and set each node's `prev` to the proper value
+// the old value of each node's `prev` is not used here
+// it is possible to trigger `index out of bounds` here (if constraint is violated), see the comment in `FuncBB::new`
 pub(crate) fn simplify(mut bb: Vec<BB>) -> Vec<BB> {
   fn dfs(x: usize, bb: &mut [BB], vis: &mut [bool]) {
     if vis[x] { return; }
@@ -245,7 +257,7 @@ pub(crate) fn simplify(mut bb: Vec<BB>) -> Vec<BB> {
         NextKind::Jif { cond, z, fail: actual[fail as usize], jump: actual[jump as usize] },
       n => n
     };
-    b.prev.clear(); // prev is filled afterwards, it's old value is not used in this function
+    b.prev.clear();
     new.push(b);
   }
   for idx in 0..new.len() { // borrow checker...

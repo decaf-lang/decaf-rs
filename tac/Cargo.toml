@@ -7,5 +7,3 @@ edition = "2018"
 [dependencies]
 common = { path = "../common" }
 typed-arena = "1.4.1"
-strum = "0.15.0"
-strum_macros = "0.15.0"
