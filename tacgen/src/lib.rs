@@ -249,6 +249,7 @@ impl<'a> TacGen<'a> {
               arg_arr: c.arg.iter().any(|a| a.ty.get().arr > 0),
             };
             if fu.static_ {
+              if let Some(o) = v.owner.as_ref() { let _ = self.expr(o, f); }
               for a in args { f.push(Param { src: [a] }); }
               f.push(Tac::Call { dst: ret, kind: CallKind::Static(self.func_info[&Ref(fu)].idx, hint) });
             } else {

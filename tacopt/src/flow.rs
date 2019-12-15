@@ -65,7 +65,7 @@ impl<M: Meet<u32>> Flow<M> {
       let FlowElem { gen, kill, in_, out, .. } = self.split();
       for i in 0..(n * each) {
         // I have checked output assembly, unfortunately rustc & llvm currently can NOT optimize these range checks
-        // if this project is not a course exercise, I will not hesitate at all to use unsafe here
+        // if this project is not a course exercise, I will not hesitate to use `unsafe` here
         let ox = out[i];
         out[i] = gen[i] | (in_[i] & !kill[i]);
         changed |= out[i] != ox;

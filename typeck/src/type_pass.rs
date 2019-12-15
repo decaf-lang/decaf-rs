@@ -75,7 +75,9 @@ impl<'a> TypePass<'a> {
         s.stmt(&f.init);
         s.check_bool(&f.cond);
         s.stmt(&f.update);
+        s.loop_cnt += 1;
         for st in &f.body.stmt { s.stmt(st); } // not calling block(), because the scope is already opened
+        s.loop_cnt -= 1;
         false
       }),
       StmtKind::Return(r) => {

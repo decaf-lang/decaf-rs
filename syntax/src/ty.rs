@@ -58,16 +58,19 @@ impl<'a> Ty<'a> {
     use TyKind::*;
     match (self.kind, rhs.kind) {
       (Error, _) | (_, Error) => true,
-      _ => self.arr == rhs.arr && match (self.kind, rhs.kind) {
-        (Int, Int) | (Bool, Bool) | (String, String) | (Void, Void) => true,
-        (Object(c1), Object(Ref(c2))) => c1.extends(c2),
-        (Null, Object(_)) => true,
-        (Func(rp1), Func(rp2)) => {
-          let (r1, p1, r2, p2) = (&rp1[0], &rp1[1..], &rp2[0], &rp2[1..]);
-          r1.assignable_to(*r2) && p1.len() == p2.len() && p1.iter().zip(p2.iter()).all(|(p1, p2)| p2.assignable_to(*p1))
+      _ if self.arr == rhs.arr => if self.arr == 0 {
+        match (self.kind, rhs.kind) {
+          (Int, Int) | (Bool, Bool) | (String, String) | (Void, Void) => true,
+          (Object(c1), Object(Ref(c2))) => c1.extends(c2),
+          (Null, Object(_)) => true,
+          (Func(rp1), Func(rp2)) => {
+            let (r1, p1, r2, p2) = (&rp1[0], &rp1[1..], &rp2[0], &rp2[1..]);
+            r1.assignable_to(*r2) && p1.len() == p2.len() && p1.iter().zip(p2.iter()).all(|(p1, p2)| p2.assignable_to(*p1))
+          }
+          _ => false,
         }
-        _ => false,
-      }
+      } else { *self == rhs }
+      _ => false,
     }
   }
 
