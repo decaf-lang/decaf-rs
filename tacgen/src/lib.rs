@@ -177,7 +177,8 @@ impl<'a> TacGen<'a> {
     let assign = self.cur_assign.take();
     match &e.kind {
       VarSel(v) => {
-        let var = v.var.get().unwrap();
+        // if `e` is a class name, v.var.get() may be None, this happens only when calling a static function with class name
+        let var = if let Some(var) = v.var.get() { var } else { return Reg(0); };
         let off = self.var_info[&Ref(var)].off; // may be register id or offset in class
         match var.owner.get().unwrap() {
           ScopeOwner::Local(_) | ScopeOwner::Param(_) => if let Some(src) = assign { // `off` is register

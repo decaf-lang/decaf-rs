@@ -1,4 +1,4 @@
-use std::{io::{self, BufReader, BufWriter}, fs::{self, File}, fmt, panic, path::{Path, PathBuf}, any::Any, sync::{Arc, Mutex}, process::{Command, Stdio}};
+use std::{io::{self, BufReader}, fs::{self, File}, fmt, panic, path::{Path, PathBuf}, any::Any, sync::{Arc, Mutex}, process::{Command, Stdio}};
 use colored::*;
 use crate::{CompileCfg, Parser, Stage, Alloc};
 
@@ -82,8 +82,8 @@ pub fn run(i: impl AsRef<Path>, o: impl AsRef<Path>, pa: Pa) -> io::Result<Strin
         fs::write(tac, &p)?;
         tacvm::work(&p, 100_000, 1000, true, true,
                     Box::new(BufReader::new(io::stdin())),
-                    Box::new(BufWriter::new(File::create(&out)?)),
-                    Box::new(BufWriter::new(File::create(o.with_extension("info"))?)),
+                    Box::new(File::create(&out)?),
+                    Box::new(File::create(o.with_extension("info"))?),
         )?;
         fs::read_to_string(o)?
       }

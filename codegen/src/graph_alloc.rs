@@ -141,8 +141,8 @@ impl<A: AllocCtx> Allocator<A> {
 
   // the paper defines many functions that return a set of nodes, we don't really need to allocate space for a set, using an iterator is better
   // however rust's lifetime requirement almost make it impossible to define such functions that return an iterator
-  // because it must borrow self as an whole, so you can't modify any other fields which are not involved in this iterator
-  // the solution is to inline these functions manually, then it will only borrow some fields of self, not self as an whole
+  // because it must borrow self as a whole, so you can't modify any other fields, even though they are not involved in this iterator
+  // the solution is to inline these functions manually, then rustc knows that it will borrows some fields of self
 
   fn mk_work_list(&mut self) {
     unimplemented!()  
