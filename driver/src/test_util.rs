@@ -74,15 +74,10 @@ pub fn run(i: impl AsRef<Path>, o: impl AsRef<Path>, pa: Pa) -> io::Result<Strin
     Ok(p) => match cfg.stage {
       Stage::Parse | Stage::TypeCk => (fs::write(o, &p), p).1,
       Stage::Tac | Stage::TacOpt => {
-        let (tac, out) = if cfg.stage == Stage::Tac {
-          (o.with_extension("tac"), o.to_path_buf())
-        } else {
-          (o.to_path_buf(), o.with_extension("output")) // in pa4 we compare tac as result
-        };
-        fs::write(tac, &p)?;
+        fs::write(o.with_extension("tac"), &p)?;
         tacvm::work(&p, 100_000, 1000, true, true,
                     Box::new(BufReader::new(io::stdin())),
-                    Box::new(File::create(&out)?),
+                    Box::new(File::create(&o)?),
                     Box::new(File::create(o.with_extension("info"))?),
         )?;
         fs::read_to_string(o)?
