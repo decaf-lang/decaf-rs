@@ -152,6 +152,14 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
     self.bb.push((epi, [None, None]));
   }
 
+  // prologue:
+  //   1. adjust $sp to leave enough space for spilling
+  //   2. move function arguments to virtual registers representing function arguments
+  //   3. save all callee-saved registers ($sp is not included)
+  // epilogue:
+  //   1. restore all callee-saved registers ($sp is not included)
+  //   2. adjust $sp back
+  //   3. do return (jr $ra)
   fn build_prologue_epilogue(&mut self) -> (Vec<AsmTemplate>, Vec<AsmTemplate>) {
     use AsmTemplate::*;
     let (mut pro, mut epi) = (Vec::new(), Vec::new());
@@ -177,15 +185,20 @@ impl<'a: 'b, 'b> FuncGen<'a, 'b> {
 }
 
 impl<'a: 'b, 'b> FuncGen<'a, 'b> {
+  // 0..Self::K : physical allocable registers
+  // Self::K..REG_N : physical unallocable registers, though they are unallocable, they may still be used in some insts
+  // REG_N : virtual registers
   fn involved_in_alloc(r: u32) -> bool {
     r < Self::K /* an allocatable machine register */ || r >= REG_N /* an virtual register */
   }
 
   fn new_reg(&mut self) -> u32 { (self.reg_num, self.reg_num += 1).0 }
 
+  // find a unique slot on the stack for `vreg` to spill
+  // assume `vreg` >= REG_N, i.e., it is a legal virtual register id
   pub(crate) fn find_spill_slot(&mut self, vreg: u32) -> Imm {
     let vreg = vreg - REG_N;
-    if vreg < self.param_num.max(ARG_N) { // function arguments already have places to spill
+    if vreg < self.param_num { // function arguments already have places to spill
       Imm::Tag(vreg)
     } else {
       let new_slot = (self.spill2slot.len() as i32 + self.ch_param_num as i32) * WORD_SIZE;
@@ -284,7 +297,6 @@ impl FuncGen<'_, '_> {
       }
       Tac::Un { op, dst, r } => match r[0] {
         Operand::Const(r) => b.push(Li(vreg(dst), Imm::Int(op.eval(r)))),
-        // luckily(?) the name used in printing ast is just the mips asm name
         Operand::Reg(r) => b.push(Un(op, vreg(dst), vreg(r))),
       }
       Tac::Assign { dst, src } => self.build_mv(vreg(dst), src[0], b),
@@ -351,6 +363,7 @@ impl FuncGen<'_, '_> {
     }
   }
 
+  // some intrinsic functions can be translated to syscall directly (of course it is not efficient, but it is easy to implement)
   // return true if a real function call is generated
   fn build_intrinsic(&self, i: Intrinsic, b: &mut Vec<AsmTemplate>) -> bool {
     use Intrinsic::*;
@@ -368,7 +381,7 @@ impl FuncGen<'_, '_> {
     false
   }
 
-  // epilogue is the index of epilogue bb
+  // `epilogue` is the index of epilogue bb
   // note that all jump target should inc by 1, because prologue takes index 0
   fn build_next(&mut self, idx: u32, epilogue: u32, next: NextKind, b: &mut Vec<AsmTemplate>) -> [Option<u32>; 2] {
     match next {
